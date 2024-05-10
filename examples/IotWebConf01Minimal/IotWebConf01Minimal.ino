@@ -1,10 +1,11 @@
 
 // the setup function runs once when you press reset or power the board
+#include "favicon.h"
 #include <IotWebConf.h>
 #include "IotWebConfAsyncClass.h"
 
 // -- Configuration specific key. The value should be modified if config structure was changed.
-#define CONFIG_VERSION "A4"
+#define CONFIG_VERSION "A1"
 
 // -- When CONFIG_PIN is pulled to ground on startup, the Thing will use the initial
 //      password to buld an AP. (E.g. in case of lost password)
@@ -53,6 +54,12 @@ void setup() {
 			iotWebConf.handleConfig(&asyncWebRequestWrapper);
 		}
 	);
+	server.on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest* request) {
+		AsyncWebServerResponse* response = request->beginResponse_P(200, "image/x-icon", favicon_ico_gz, favicon_ico_gz_len);
+		response->addHeader("Content-Encoding", "gzip");
+		request->send(response);
+		}
+	);
 	server.onNotFound([](AsyncWebServerRequest* request) { 
 			AsyncWebRequestWrapper asyncWebRequestWrapper(request);
 			iotWebConf.handleNotFound(&asyncWebRequestWrapper);
@@ -74,7 +81,7 @@ void handleRoot(AsyncWebServerRequest* request){
 		return;
 	}
 	String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
-	s += "<title>IotWebConf 01 Minimal</title></head><body>";
+	s += "<title>IotWebConfAsync 01</title></head><body>";
 	s += "Go to <a href='config'>configure page</a> to change settings.";
 	s += "</body></html>\n";
 

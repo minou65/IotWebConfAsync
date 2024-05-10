@@ -11,19 +11,22 @@
 
 #ifdef ESP8266
 #include <ESPAsyncTCP.h>
+#include <Updater.h>
 #elif defined(ESP32)
 #include <AsyncTCP.h>
+#include <Update.h>
 #endif
 
 #include <ESPAsyncWebServer.h>
 #include <IotWebConfWebServerWrapper.h>
+#include <vector>
+#include <StreamString.h>
 
 class AsyncWebRequestWrapper : public iotwebconf::WebRequestWrapper {
 public:
 	AsyncWebRequestWrapper(AsyncWebServerRequest* request) 
 		: _headers(LinkedList<AsyncWebHeader*>([](AsyncWebHeader* h) { delete h; })),
 		_first(false),
-		_currentVersion(0),
 		_contentLength(0)
 	{
 		this->_request = request; 
@@ -68,52 +71,74 @@ public:
 	void sendHeader(const String& name, const String& value, bool first = false) override {
 		_headers.add(new AsyncWebHeader(name.c_str(), value.c_str()));
 		this->_first = first;
+
 	};
 
 	void setContentLength(const size_t contentLength) override {
 		this->_contentLength = contentLength;
-		Serial.printf("Content length: %d\n", contentLength);
 	};
 	
 	void send(int code, const char* content_type = nullptr, const String& content = String("")) override {
 		AsyncWebServerResponse* response = this->_request->beginResponse(code, content_type, content.c_str());;
-
-		response->setContentLength(this->_contentLength);
 		for (const auto& header : _headers) {
 			response->addHeader(header->name().c_str(), header->value().c_str());
-			Serial.printf("Header: %s: %s added\n", header->name().c_str(), header->value().c_str());
 		};
+
+		if (!isHeaderInList("Content-Length")) {
+			response->setContentLength(this->_contentLength);
+		}
+
 		this->_request->send(response);
+
 	};
 
 	void sendContent(const String& content) override {
-		String content_ = String(content);
-		AsyncWebServerResponse* response = this->_request->beginChunkedResponse("text/html", [content_](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
-
-			String chunk = content_.substring(index, index + maxLen);
-			chunk.getBytes(buffer, chunk.length());
-
-			//Serial.println("[WEB] Sending chunk: " + chunk);
-			//Serial.printf("[WEB] Sending %d bytes\n", chunk.length());
-			//Serial.printf("[WEB] max chunk size: %d\n", maxLen);
-			//Serial.printf("[WEB] index: %d\n", index);
-
-			// Return the actual length of the chunk (0 for end of file)
-			return chunk.length();
-
-		});
-
-		_request->send(response);
+		std::string content_ = content.c_str();
+		_content.push_back(content_);
 	};
 
 	void stop() override {
-		//this->_request->client()->stop();
-		this->_request->client()->close();
+
+		//Serial.println("[WEB] Stopping request");
+		std::vector<std::string> content_ = _content;
+		std::shared_ptr<uint16_t> counter_ = std::make_shared<uint16_t>(0);
+
+		AsyncWebServerResponse* response = this->_request->beginChunkedResponse("text/html", [content_, counter_](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {			
+			
+			std::string chunk_ = "";
+
+			for (*counter_; *counter_ < content_.size(); *counter_ += 1) {
+				//Serial.printf("[CHUNK] counter: %i\n", *counter_);
+				if (chunk_.length() + content_[*counter_].length() < maxLen) {
+					//Serial.println("[CHUNK] adding chunk");
+					chunk_ += content_[*counter_];
+				}
+				else {
+					//Serial.println("[CHUNK] breaking");
+					//Serial.printf("[CHUNK] index: %i\n", index);
+					//Serial.printf("[CHUNK] maxLen: %i\n", maxLen);
+					//Serial.printf("[CHUNK] chunk space: %i\n", chunk_.length() + content_[*counter_].length());
+					if (chunk_.length() == 0) {
+						chunk_ = "\r\n";
+					}
+					break;
+				}
+			}
+			//Serial.printf("[CHUNK] sending: %s\n", chunk_.c_str());
+			//Serial.printf("[CHUNK] sending: %d bytes\n", chunk_.length());
+			chunk_.copy((char*)buffer, chunk_.length());
+			if (*counter_ <= content_.size()) {
+				return chunk_.length();
+			}
+			return 0;
+		});
+		this->_request->send(response);
 	};
 	
 protected:
 	AsyncWebServerRequest* _request;
 	LinkedList<AsyncWebHeader*> _headers;
+	std::vector<std::string> _content;
 
 	size_t _contentLength;
 
@@ -121,12 +146,19 @@ private:
 	AsyncWebRequestWrapper();
 
 	bool _first;
-	uint8_t _currentVersion;
+
+	bool isHeaderInList(const char* name) {
+		for (AsyncWebHeader* header : _headers) {
+			if (strcmp(header->name().c_str(), name) == 0) {
+				return true;
+			}
+		}
+		return false;
+	}
 
 	friend class IotWebConf;
 	friend class AsyncWebServerRequest;
 };
-
 
 class AsyncWebServerWrapper : public iotwebconf::WebServerWrapper {
 public:

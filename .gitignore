@@ -10,6 +10,12 @@
 *.userosscache
 *.sln.docstates
 
+# Files built by 
+/sch/*.b#*
+/sch/*.pro
+/sch/*.s#*
+
+
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 
@@ -400,6 +406,6 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
-*.s#1
-/.vscode/settings.json
-sch/Thumbs.db
+*.heic
+.vscode/settings.json
+sch/DCC zDecoder.zip

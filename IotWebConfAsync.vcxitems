@@ -1,0 +1,33 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <MSBuildAllProjects>$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
+    <HasSharedItems>true</HasSharedItems>
+    <ItemsProjectGuid>{29e3857e-1fdb-46ef-9472-e55b3970de9e}</ItemsProjectGuid>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(MSBuildThisFileDirectory)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ProjectCapability Include="SourceItemsFromImports" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="$(MSBuildThisFileDirectory)readme.txt" />
+    <Text Include="$(MSBuildThisFileDirectory)library.properties" />
+    <Text Include="$(MSBuildThisFileDirectory)src\IotWebConfAsync.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- <ClInclude Include="$(MSBuildThisFileDirectory)IotWebConfAsync.h" /> -->
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\favicon.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\IotWebConfAsyncClass.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\IotWebConfAsyncUpdateServer.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\vector.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)examples\IotWebConf01Minimal\IotWebConf01Minimal.ino" />
+    <None Include="$(MSBuildThisFileDirectory)examples\IotWebConf02WebSerial\IotWebConf02WebSerial.ino" />
+    <None Include="$(MSBuildThisFileDirectory)examples\IotWebConf03Firmware\IotWebConf03Firmware.ino" />
+  </ItemGroup>
+</Project>
