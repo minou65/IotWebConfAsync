@@ -409,3 +409,5 @@ FodyWeavers.xsd
 *.heic
 .vscode/settings.json
 sch/DCC zDecoder.zip
+IotWebConfAsync.vcxitems
+IotWebConfAsync.vcxitems
