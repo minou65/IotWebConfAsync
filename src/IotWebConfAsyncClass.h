@@ -19,15 +19,14 @@
 
 #include <ESPAsyncWebServer.h>
 #include <IotWebConfWebServerWrapper.h>
-#include <vector>
-#include <StreamString.h>
+
 
 class AsyncWebRequestWrapper : public iotwebconf::WebRequestWrapper {
 public:
 	AsyncWebRequestWrapper(AsyncWebServerRequest* request) 
 		: _headers(LinkedList<AsyncWebHeader*>([](AsyncWebHeader* h) { delete h; })),
 		_first(false),
-		_contentLength(0)
+		_content("")
 	{
 		this->_request = request; 
 	};
@@ -93,59 +92,40 @@ public:
 	};
 
 	void sendContent(const String& content) override {
-		std::string content_ = content.c_str();
-		_content.push_back(content_);
+		_content += content.c_str();
 	};
 
 	void stop() override {
+		std::string cache_ = _content;
 
-		//Serial.println("[WEB] Stopping request");
-		std::vector<std::string> content_ = _content;
-		std::shared_ptr<uint16_t> counter_ = std::make_shared<uint16_t>(0);
+		AsyncWebServerResponse* response = this->_request->beginChunkedResponse("text/html", [cache_](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
 
-		AsyncWebServerResponse* response = this->_request->beginChunkedResponse("text/html", [content_, counter_](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {			
-			
 			std::string chunk_ = "";
-
-			for (*counter_; *counter_ < content_.size(); *counter_ += 1) {
-				//Serial.printf("[CHUNK] counter: %i\n", *counter_);
-				if (chunk_.length() + content_[*counter_].length() < maxLen) {
-					//Serial.println("[CHUNK] adding chunk");
-					chunk_ += content_[*counter_];
-				}
-				else {
-					//Serial.println("[CHUNK] breaking");
-					//Serial.printf("[CHUNK] index: %i\n", index);
-					//Serial.printf("[CHUNK] maxLen: %i\n", maxLen);
-					//Serial.printf("[CHUNK] chunk space: %i\n", chunk_.length() + content_[*counter_].length());
-					if (chunk_.length() == 0) {
-						chunk_ = "\r\n";
-					}
-					break;
-				}
+			size_t len_ = min(cache_.length() - index, maxLen);
+			if (len_ > 0) {
+				chunk_ = cache_.substr(index, len_);
+				chunk_.copy((char*)buffer, chunk_.length());
 			}
-			//Serial.printf("[CHUNK] sending: %s\n", chunk_.c_str());
-			//Serial.printf("[CHUNK] sending: %d bytes\n", chunk_.length());
-			chunk_.copy((char*)buffer, chunk_.length());
-			if (*counter_ <= content_.size()) {
+			if (index + len_ <= cache_.length())
 				return chunk_.length();
-			}
-			return 0;
-		});
+			else
+				return 0;
+
+			});
+		response->addHeader("Server", "ESP Async Web Server");
 		this->_request->send(response);
 	};
 	
 protected:
 	AsyncWebServerRequest* _request;
 	LinkedList<AsyncWebHeader*> _headers;
-	std::vector<std::string> _content;
+	std::string  _content;
 
 	size_t _contentLength;
+	bool _first;
 
 private:
 	AsyncWebRequestWrapper();
-
-	bool _first;
 
 	bool isHeaderInList(const char* name) {
 		for (AsyncWebHeader* header : _headers) {
