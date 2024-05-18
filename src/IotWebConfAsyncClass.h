@@ -129,7 +129,7 @@ public:
 			std::string chunk_ = "";
 			size_t len_ = min(cache_.length() - index, maxLen);
 			if (len_ > 0) {
-				chunk_ = cache_.substr(index, len_);
+				chunk_ = cache_.substr(index, len_ - 1);
 				chunk_.copy((char*)buffer, chunk_.length());
 			}
 			if (index + len_ <= cache_.length())
