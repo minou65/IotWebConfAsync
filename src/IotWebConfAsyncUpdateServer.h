@@ -42,12 +42,10 @@ size_t  contentlen;
 
 #define emptyString F("")
 
-
-void handleDoUpdate(AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final) {
-
-
+void handleUpload(AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final){
     if (!index) {
-        Serial.println("Update");
+        Serial.println("Update started...");
+		WebSerial.println("Update started...");
         size_t _contentlen = request->contentLength();
         // if filename includes spiffs, update the spiffs partition
         int cmd = (filename.indexOf("spiffs") > -1) ? U_PART : U_FLASH;
@@ -83,8 +81,8 @@ void handleDoUpdate(AsyncWebServerRequest* request, const String& filename, size
             request->send(200, "text/plain", String(F("Update error: ")) + Update.getError());
         }
         else {
-			delay(100);
-            Serial.println("Update complete. Will reboot esp");
+			delay(500);
+            Serial.println("Update completed. Will reboot esp");
             Serial.flush();
             ESP.restart();
         }
@@ -93,7 +91,14 @@ void handleDoUpdate(AsyncWebServerRequest* request, const String& filename, size
 
 #ifdef ESP32    
 void printProgress(size_t prg, size_t sz) {
-    Serial.printf("Progress: %d%%\n", (prg * 100) / contentlen);
+    static size_t lastPrinted = 0;
+    size_t currentPercent = (prg * 100) / sz;
+
+    if (currentPercent % 5 == 0 && currentPercent != lastPrinted) {
+        Serial.printf("Progress: %d%%\n", currentPercent);
+        WebSerial.printf("Progress: %d%%\n", currentPercent);
+        lastPrinted = currentPercent;
+    }
 }
 #endif
 
@@ -142,15 +147,12 @@ public:
 
         // handler for the /update form POST (once file upload finishes)
         _server->on(path.c_str(), HTTP_POST, 
-            [&](AsyncWebServerRequest* request) {
-
+            [](AsyncWebServerRequest* request) {
+				Serial.println("Update POST request");
             },
             [](AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final) {
-                AsyncWebServerResponse* response = request->beginResponse(200, "text/plain", "update in progress ...");
-                request->client()->setNoDelay(true);
-                request->send(response);
-                handleDoUpdate(request, filename, index, data, len, final); 
-            }
+                handleUpload(request, filename, index, data, len, final);
+			}
         );
 
 #ifdef ESP32
@@ -223,16 +225,3 @@ private:
 #endif
 
 #endif
-
-
-
-
-
-//
-//<form method = "POST" action = "/doUpdate" enctype = "multipart/form-data">
-//<fieldset>
-//<legend>Datei auswählen : < / legend>
-//<input type = "file" name = "update" id = "updateFile">
-//<button type = "submit">Aktualisieren< / button>
-//< / fieldset>
-//< / form>
