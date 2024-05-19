@@ -45,7 +45,6 @@ size_t  contentlen;
 void handleUpload(AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final){
     if (!index) {
         Serial.println("Update started...");
-		WebSerial.println("Update started...");
         size_t _contentlen = request->contentLength();
         // if filename includes spiffs, update the spiffs partition
         int cmd = (filename.indexOf("spiffs") > -1) ? U_PART : U_FLASH;
@@ -93,12 +92,7 @@ void handleUpload(AsyncWebServerRequest* request, const String& filename, size_t
 void printProgress(size_t prg, size_t sz) {
     static size_t lastPrinted = 0;
     size_t currentPercent = (prg * 100) / sz;
-
-    if (currentPercent % 5 == 0 && currentPercent != lastPrinted) {
-        Serial.printf("Progress: %d%%\n", currentPercent);
-        WebSerial.printf("Progress: %d%%\n", currentPercent);
-        lastPrinted = currentPercent;
-    }
+    Serial.printf("Progress: %d%%\n", currentPercent);
 }
 #endif
 
@@ -121,10 +115,26 @@ public:
 
     void setup(AsyncWebServer* server, const String& path) {
         setup(server, path, emptyString, emptyString);
+#ifdef ESP32
+        Update.onProgress(printProgress);
+#endif
     }
+
+#ifdef ESP32
+    typedef std::function<void(size_t, size_t)> THandlerFunction_Progress;
+
+    void setup(AsyncWebServer* server, const String& path, THandlerFunction_Progress fn) {
+        setup(server, path, emptyString, emptyString);
+        Update.onProgress(fn);
+
+    }
+#endif
 
     void setup(AsyncWebServer* server, const String& username, const String& password) {
         setup(server, "/update", username, password);
+#ifdef ESP32
+        Update.onProgress(printProgress);
+#endif
     }
 
     void setup(AsyncWebServer* server, const String& path, const String& username, const String& password) {
@@ -144,7 +154,6 @@ public:
             }
         );
 
-
         // handler for the /update form POST (once file upload finishes)
         _server->on(path.c_str(), HTTP_POST, 
             [](AsyncWebServerRequest* request) {
@@ -154,10 +163,6 @@ public:
                 handleUpload(request, filename, index, data, len, final);
 			}
         );
-
-#ifdef ESP32
-        Update.onProgress(printProgress);
-#endif
     }
 
     void updateCredentials(const String& username, const String& password) {
