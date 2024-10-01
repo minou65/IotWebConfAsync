@@ -30,9 +30,9 @@
 #define _IOTWEBCONFASYNCCLASS_h
 
 #if defined(ARDUINO) && ARDUINO >= 100
-	#include "arduino.h"
+#include "arduino.h"
 #else
-	#include "WProgram.h"
+#include "WProgram.h"
 #endif
 
 #ifdef ESP8266
@@ -45,45 +45,46 @@
 
 #include <ESPAsyncWebServer.h>
 #include <IotWebConfWebServerWrapper.h>
+#include <vector>
 
 
 class AsyncWebRequestWrapper : public iotwebconf::WebRequestWrapper {
 public:
-	AsyncWebRequestWrapper(AsyncWebServerRequest* request) 
-		: _headers(LinkedList<AsyncWebHeader*>([](AsyncWebHeader* h) { delete h; })),
-		_first(false),
-		_content("")
-	{
-		this->_request = request; 
+	AsyncWebRequestWrapper(AsyncWebServerRequest* request) {
+		this->_request = request;
+		_first = false;
+		_contentLength = 0;
 	};
 
 	~AsyncWebRequestWrapper() {
-		_headers.free();
+		for (auto header : _headers) {
+			delete header;
+		}
 	}
 
 	const String hostHeader() const override {
 		return this->_request->host();
 	};
 
-	IPAddress localIP() override { 
+	IPAddress localIP() override {
 		return this->_request->client()->localIP();
 	};
 
-	uint16_t localPort() override { 
+	uint16_t localPort() override {
 		return this->_request->client()->localPort();
 	};
 
-	const String uri() const override { 
-		return this->_request->url(); 
+	const String uri() const override {
+		return this->_request->url();
 	};
 
 	bool authenticate(const char* username, const char* password) override {
 		return this->_request->authenticate(username, password);
 	};
-	
+
 	void requestAuthentication() override {
 		this->_request->requestAuthentication();
-	};	
+	};
 
 	bool hasArg(const String& name) override {
 		return this->_request->hasArg(name.c_str());
@@ -94,7 +95,7 @@ public:
 	};
 
 	void sendHeader(const String& name, const String& value, bool first = false) override {
-		_headers.add(new AsyncWebHeader(name.c_str(), value.c_str()));
+		_headers.push_back(new AsyncWebHeader(name.c_str(), value.c_str()));
 		this->_first = first;
 
 	};
@@ -102,9 +103,9 @@ public:
 	void setContentLength(const size_t contentLength) override {
 		this->_contentLength = contentLength;
 	};
-	
+
 	void send(int code, const char* content_type = nullptr, const String& content = String("")) override {
-		AsyncWebServerResponse* response = this->_request->beginResponse(code, content_type, content.c_str());;
+		AsyncWebServerResponse* response = this->_request->beginResponse(code, content_type, content.c_str());
 		for (const auto& header : _headers) {
 			response->addHeader(header->name().c_str(), header->value().c_str());
 		};
@@ -118,34 +119,111 @@ public:
 	};
 
 	void sendContent(const String& content) override {
-		_content += content.c_str();
-	};
+		//Serial.println("AsyncWebRequestWrapper::sendContent()");
+		//Serial.print("    Adding content of length: "); Serial.println(content.length());
+
+		// Überprüfen Sie den freien Speicher
+		//size_t freeHeap = ESP.getFreeHeap();
+		//Serial.print("    Free heap before adding content: "); Serial.println(freeHeap);
+
+		// Überprüfen Sie die Gültigkeit von content
+		if (content.length() == 0) {
+			ESP_LOGW("AsyncWebRequestWrapper", "Warning: content is empty");
+			return;
+		}
+
+		// Überprüfen Sie, ob genügend freier Speicher vorhanden ist
+		//if (freeHeap < content.length()) {
+		//	//Serial.println("    Error: not enough free heap to add content");
+		//	return;
+		//}
+
+		// Fügen Sie den Inhalt zu _content hinzu
+		try {
+			String convertedContent = content;
+			convertedContent.replace("\r\n", "\n");
+
+			_content.insert(_content.end(), convertedContent.begin(), convertedContent.end());
+		}
+		catch (const std::exception& e) {
+			ESP_LOGE("AsyncWebRequestWrapper", "Error: exception caught while adding content: %s", e.what());
+			return;
+		}
+		catch (...) {
+			ESP_LOGE("AsyncWebRequestWrapper", "Error: unknown exception caught while adding content");
+			return;
+		}
+
+		//Serial.print("    Free heap after adding content: "); Serial.println(ESP.getFreeHeap());
+		//Serial.print("    Total content length: "); Serial.println(_content.size());
+	}
 
 	void stop() override {
-		std::string cache_ = _content;
+		//Serial.println("AsyncWebRequestWrapper::stop()");
 
-		AsyncWebServerResponse* response = this->_request->beginChunkedResponse("text/html", [cache_](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+		if (_content.empty()) {
+			//Serial.println("    Error: _content is empty");
+			return;
+		}
 
-			std::string chunk_ = "";
-			size_t len_ = min(cache_.length() - index, maxLen);
-			if (len_ > 0) {
-				chunk_ = cache_.substr(index, len_ - 1);
-				chunk_.copy((char*)buffer, chunk_.length());
-			}
-			if (index + len_ <= cache_.length())
-				return chunk_.length();
-			else
-				return 0;
+		// Überprüfen Sie den freien Speicher
+		//size_t freeHeap = ESP.getFreeHeap();
+		//Serial.print("    Free heap before creating cache_: "); Serial.println(freeHeap);
 
-			});
-		response->addHeader("Server", "ESP Async Web Server");
-		this->_request->send(response);
-	};
-	
+		// Überprüfen Sie, ob genügend freier Speicher vorhanden ist
+		//if (freeHeap < _content.size() * sizeof(char)) {
+		//	Serial.println("    Error: not enough free heap to create cache_");
+		//	return;
+		//}
+
+		// Erstellen eines shared_ptr für _content
+		try {
+			auto cache_ = std::make_shared<std::vector<char>>(_content);
+			Serial.print("    Total content length: "); Serial.println(_content.size());
+
+			AsyncWebServerResponse* response = this->_request->beginChunkedResponse("text/html", [cache_](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+				size_t len_ = std::min(cache_->size() - index, maxLen);
+				//Serial.print("    Index: "); Serial.print(index);
+				//Serial.print("    Len: "); Serial.println(len_);
+				//Serial.print("    MaxLen: "); Serial.println(maxLen);
+				//Serial.print("    Cache length: "); Serial.println(cache_->size());
+
+				// Überprüfen, ob die Länge und die Speicheradresse gültig sind
+				if (len_ > 0 && index < cache_->size()) {
+					//Serial.println("    Copying chunk");
+					memcpy(buffer, cache_->data() + index, len_);
+					return len_;
+				}
+				else {
+					//Serial.println("    Error: Invalid length or index");
+					return 0; // Länge auf 0 setzen, um sicherzustellen, dass keine ungültigen Daten kopiert werden
+				}
+				});
+
+			response->addHeader("Server", "ESP Async Web Server");
+			this->_request->send(response);
+		}
+		catch (const std::bad_alloc& e) {
+			ESP_LOGE("AsyncWebRequestWrapper", "Error: bad_alloc exception caught");
+		}
+		catch (const std::exception& e) {
+			ESP_LOGE("AsyncWebRequestWrapper", "Error: exception caught: %s", e.what());
+		}
+		catch (...) {
+			ESP_LOGE("AsyncWebRequestWrapper", "Error: unknown exception caught");
+		}
+
+		// Zusätzliche Debugging-Informationen
+		//Serial.println("AsyncWebRequestWrapper::stop() completed");
+	}
+
+
+
+
 protected:
 	AsyncWebServerRequest* _request;
-	LinkedList<AsyncWebHeader*> _headers;
-	std::string  _content;
+	std::list<AsyncWebHeader*> _headers;
+	std::vector<char> _content;
 
 	size_t _contentLength;
 	bool _first;
@@ -168,7 +246,7 @@ private:
 
 class AsyncWebServerWrapper : public iotwebconf::WebServerWrapper {
 public:
-	AsyncWebServerWrapper(AsyncWebServer* server) { this->_server = server;  };
+	AsyncWebServerWrapper(AsyncWebServer* server) { this->_server = server; };
 
 	void handleClient() override {};
 	void begin() override { this->_server->begin(); };
@@ -182,4 +260,3 @@ private:
 };
 
 #endif
-
