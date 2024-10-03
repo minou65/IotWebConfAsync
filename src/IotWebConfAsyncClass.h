@@ -54,6 +54,7 @@ public:
 		this->_request = request;
 		_first = false;
 		_contentLength = 0;
+		_isChunked = false;
 	};
 
 	~AsyncWebRequestWrapper() {
@@ -97,136 +98,185 @@ public:
 	void sendHeader(const String& name, const String& value, bool first = false) override {
 		_headers.push_back(new AsyncWebHeader(name.c_str(), value.c_str()));
 		this->_first = first;
-
 	};
 
 	void setContentLength(const size_t contentLength) override {
 		this->_contentLength = contentLength;
+		if (_contentLength == CONTENT_LENGTH_UNKNOWN) {
+			_isChunked = true;
+		}
 	};
 
 	void send(int code, const char* content_type = nullptr, const String& content = String("")) override {
-		AsyncWebServerResponse* response = this->_request->beginResponse(code, content_type, content.c_str());
-		for (const auto& header : _headers) {
-			response->addHeader(header->name().c_str(), header->value().c_str());
-		};
+		//AsyncWebServerResponse* response = this->_request->beginResponse(code, content_type, content.c_str());
+		//for (const auto& header : _headers) {
+		//	response->addHeader(header->name().c_str(), header->value().c_str());
+		//};
 
-		if (!isHeaderInList("Content-Length")) {
-			response->setContentLength(this->_contentLength);
-		}
+		//if (!isHeaderInList("Content-Length")) {
+		//	response->setContentLength(this->_contentLength);
+		//}
 
-		this->_request->send(response);
+		//this->_request->send(response);
 
 	};
 
+
 	void sendContent(const String& content) override {
-		//Serial.println("AsyncWebRequestWrapper::sendContent()");
-		//Serial.print("    Adding content of length: "); Serial.println(content.length());
+		//if (_isChunked) {
+		//	if (content.length() == 0) {
+		//		_isChunked = false;
+		//	}
+		//}
 
-		// Überprüfen Sie den freien Speicher
-		//size_t freeHeap = ESP.getFreeHeap();
-		//Serial.print("    Free heap before adding content: "); Serial.println(freeHeap);
-
-		// Überprüfen Sie die Gültigkeit von content
-		if (content.length() == 0) {
-			ESP_LOGW("AsyncWebRequestWrapper", "Warning: content is empty");
-			return;
-		}
-
-		// Überprüfen Sie, ob genügend freier Speicher vorhanden ist
-		//if (freeHeap < content.length()) {
-		//	//Serial.println("    Error: not enough free heap to add content");
+		//try {
+		//	std::vector<char> convertedContent(content.begin(), content.end());
+		//	_content.insert(_content.end(), convertedContent.begin(), convertedContent.end());
+		//}
+		//catch (const std::exception& e) {
+		//	ESP_LOGE("AsyncWebRequestWrapper", "Error: exception caught while adding content: %s", e.what());
+		//	return;
+		//}
+		//catch (...) {
+		//	ESP_LOGE("AsyncWebRequestWrapper", "Error: unknown exception caught while adding content");
 		//	return;
 		//}
 
-		// Fügen Sie den Inhalt zu _content hinzu
-		try {
-			String convertedContent = content;
-			convertedContent.replace("\r\n", "\n");
+		//_content.insert(_content.end(), content.begin(), content.end());
+		//Serial.println("AsyncWebRequestWrapper::sendContent done");
 
-			_content.insert(_content.end(), convertedContent.begin(), convertedContent.end());
-		}
-		catch (const std::exception& e) {
-			ESP_LOGE("AsyncWebRequestWrapper", "Error: exception caught while adding content: %s", e.what());
-			return;
-		}
-		catch (...) {
-			ESP_LOGE("AsyncWebRequestWrapper", "Error: unknown exception caught while adding content");
-			return;
-		}
+		_content.append(content.c_str());
 
-		//Serial.print("    Free heap after adding content: "); Serial.println(ESP.getFreeHeap());
-		//Serial.print("    Total content length: "); Serial.println(_content.size());
+
 	}
 
 	void stop() override {
-		//Serial.println("AsyncWebRequestWrapper::stop()");
+		Serial.println("AsyncWebRequestWrapper::stop");
+		Serial.print("    content size: "); Serial.println(_content.size());
 
-		if (_content.empty()) {
-			//Serial.println("    Error: _content is empty");
-			return;
-		}
+		// Check and print the available heap size
+		size_t freeHeap = ESP.getFreeHeap();
+		Serial.print("    Available heap size: "); Serial.println(freeHeap);
 
-		// Überprüfen Sie den freien Speicher
-		//size_t freeHeap = ESP.getFreeHeap();
-		//Serial.print("    Free heap before creating cache_: "); Serial.println(freeHeap);
+#ifdef ESP32
+		// Check and print the remaining stack size
+		UBaseType_t remainingStack = uxTaskGetStackHighWaterMark(NULL);
+		Serial.print("    Remaining stack size: "); Serial.println(remainingStack);
 
-		// Überprüfen Sie, ob genügend freier Speicher vorhanden ist
-		//if (freeHeap < _content.size() * sizeof(char)) {
-		//	Serial.println("    Error: not enough free heap to create cache_");
+		// Check and print heap fragmentation
+		size_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+		Serial.print("    Largest free block: "); Serial.println(largestBlock);
+#endif
+
+		// Create a string with 30,000 characters
+		static std::string largeString = _content;
+
+		AsyncWebServerResponse* response = this->_request->beginChunkedResponse("text/html", [](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+			Serial.print("    index: "); Serial.println(index);
+			size_t len_ = std::min(largeString.length() - index, maxLen);
+			if (len_ > 0 && index < largeString.length()) {
+				std::copy(largeString.begin() + index, largeString.begin() + index + len_, buffer);
+				return len_;
+			}
+			else {
+				return 0;
+			}
+			});
+		this->_request->send(response);
+
+
+		//auto cache_ = std::make_shared<std::vector<char>>(_content);
+
+
+		
+		//auto cache_ = std::make_shared<std::vector<char>>(_content);
+		//AsyncWebServerResponse* response = this->_request->beginChunkedResponse("text/html", [cache_](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+		//	size_t len_ = std::min(cache_->size() - index, maxLen);
+		//	if (len_ > 0 && index < cache_->size()) {
+		//		memcpy(buffer, cache_->data() + index, len_);
+		//		return len_;
+		//	}
+		//	else {
+		//		return 0;
+		//	}
+		//	});
+
+
+
+		//std::deque<char> cache_ = _content;
+		//Serial.print("    cache size: "); Serial.println(_content.size());
+		//AsyncWebServerResponse* response = this->_request->beginChunkedResponse("text/html", [cache_](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+		//	Serial.print("    index: "); Serial.println(index);
+		//	size_t len_ = std::min(cache_.size() - index, maxLen);
+		//	if (len_ > 0 && index < cache_.size()) {
+		//		std::copy(cache_.begin() + index, cache_.begin() + index + len_, buffer);
+		//		index += len_;
+		//		return len_;
+		//	}
+		//	else {
+		//		return 0;
+		//	}
+		//	});
+		//this->_request->send(response);
+
+
+		//static const char characters[] = "1234567890";
+		//static size_t charactersIndex = 0;
+		//AsyncWebServerResponse* response = this->_request->beginChunkedResponse("text/html", [](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+		//	if (index >= 81920)
+		//		return 0;
+		//	memset(buffer, characters[charactersIndex], maxLen);
+		//	charactersIndex = (charactersIndex + 1) % 10;
+		//	return maxLen;
+		//	});
+		//this->_request->send(response);
+
+
+		//if (_content.empty()) {
 		//	return;
 		//}
 
-		// Erstellen eines shared_ptr für _content
-		try {
-			auto cache_ = std::make_shared<std::vector<char>>(_content);
-			Serial.print("    Total content length: "); Serial.println(_content.size());
+		//try {
+		//	auto cache_ = std::make_shared<std::vector<char>>(_content);
 
-			AsyncWebServerResponse* response = this->_request->beginChunkedResponse("text/html", [cache_](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
-				size_t len_ = std::min(cache_->size() - index, maxLen);
-				//Serial.print("    Index: "); Serial.print(index);
-				//Serial.print("    Len: "); Serial.println(len_);
-				//Serial.print("    MaxLen: "); Serial.println(maxLen);
-				//Serial.print("    Cache length: "); Serial.println(cache_->size());
+		//	AsyncWebServerResponse* response = this->_request->beginChunkedResponse("text/html", [cache_](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+		//		size_t len_ = std::min(cache_->size() - index, maxLen);
+		//		if (len_ > 0 && index < cache_->size()) {
+		//			memcpy(buffer, cache_->data() + index, len_);
+		//			return len_;
+		//		}
+		//		else {
+		//			return 0;
+		//		}
+		//		});
 
-				// Überprüfen, ob die Länge und die Speicheradresse gültig sind
-				if (len_ > 0 && index < cache_->size()) {
-					//Serial.println("    Copying chunk");
-					memcpy(buffer, cache_->data() + index, len_);
-					return len_;
-				}
-				else {
-					//Serial.println("    Error: Invalid length or index");
-					return 0; // Länge auf 0 setzen, um sicherzustellen, dass keine ungültigen Daten kopiert werden
-				}
-				});
+		//	response->addHeader("Server", "ESP Async Web Server");
+		//	this->_request->send(response);
+		//}
+		//catch (const std::bad_alloc& e) {
+		//	ESP_LOGE("AsyncWebRequestWrapper", "Error: bad_alloc exception caught");
+		//}
+		//catch (const std::exception& e) {
+		//	ESP_LOGE("AsyncWebRequestWrapper", "Error: exception caught: %s", e.what());
+		//}
+		//catch (...) {
+		//	ESP_LOGE("AsyncWebRequestWrapper", "Error: unknown exception caught");
+		//}
 
-			response->addHeader("Server", "ESP Async Web Server");
-			this->_request->send(response);
-		}
-		catch (const std::bad_alloc& e) {
-			ESP_LOGE("AsyncWebRequestWrapper", "Error: bad_alloc exception caught");
-		}
-		catch (const std::exception& e) {
-			ESP_LOGE("AsyncWebRequestWrapper", "Error: exception caught: %s", e.what());
-		}
-		catch (...) {
-			ESP_LOGE("AsyncWebRequestWrapper", "Error: unknown exception caught");
-		}
 
-		// Zusätzliche Debugging-Informationen
-		//Serial.println("AsyncWebRequestWrapper::stop() completed");
+		resetHeaders();
+		clearContent();
 	}
-
-
-
 
 protected:
 	AsyncWebServerRequest* _request;
 	std::list<AsyncWebHeader*> _headers;
-	std::vector<char> _content;
+	//std::deque<char> _content;
+	std::string _content;
 
 	size_t _contentLength;
 	bool _first;
+	bool _isChunked;
 
 private:
 	AsyncWebRequestWrapper();
@@ -238,6 +288,18 @@ private:
 			}
 		}
 		return false;
+	}
+
+	void resetHeaders() {
+		for (auto header : _headers) {
+			delete header;
+		}
+		_headers.clear();
+	}
+
+	void clearContent() {
+		_content.clear();
+		_content.shrink_to_fit(); // Optional: Reduziert die Kapazität auf die aktuelle Größe
 	}
 
 	friend class IotWebConf;
