@@ -105,17 +105,33 @@ public:
 	};
 
 	void send(int code, const char* content_type = nullptr, const String& content = String("")) override {
+		//Serial.println("AsyncWebRequestWrapper::send");
+		//Serial.print("    Code: "); Serial.println(code);
+		//Serial.print("    Content type: "); Serial.println(content_type);
+		//Serial.print("    Content: "); Serial.println(content);
+		//Serial.print("    Content length: "); Serial.println(content.length());
+
+		try {
+			if (_isChunked) {
+				_responseStream->print(content);
+			}
+			else {
+				_responseStream->print(content);
+			}
+		}
+		catch (const std::exception& e) {
+			Serial.println(e.what());
+		}
+		catch (...) {
+			Serial.println("Unknown exception");
+		}
 	};
 
 	void sendContent(const String& content) override {
-		Serial.println("AsyncWebRequestWrapper::sendContent");
+		//Serial.println("AsyncWebRequestWrapper::sendContent");
 
 		try {
 			Serial.print("Content length: "); Serial.println(content.length());
-			String modifiedContent = content;
-			modifiedContent.replace("\r\n", "\n");
-
-	
 			_responseStream->print(content);
 		}
 		catch (const std::exception& e) {
@@ -129,7 +145,7 @@ public:
 
 	
 	void stop() override {
-		Serial.println("AsyncWebRequestWrapper::stop");
+		//Serial.println("AsyncWebRequestWrapper::stop");
 		_request->send(_responseStream);
 	};
 
