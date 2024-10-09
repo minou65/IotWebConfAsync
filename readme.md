@@ -35,7 +35,7 @@ AsyncTCP
 ## Usage
 See also the examples in the examples folder.
 
-Ìnit the AsyncWebServerWrapper with the AsyncWebServer object.
+ï¿½nit the AsyncWebServerWrapper with the AsyncWebServer object.
 ```cpp
 #include <IotWebConfAsync.h>
 
@@ -83,4 +83,9 @@ void loop()
 {
   iotWebConf.doLoop();
 }
+```
+## Debugging
+If you add the following define in your code, you can enable debugging
+```c++
+#define IOTWEBCONFASYNC_DEBUG_TO_SERIAL
 ```

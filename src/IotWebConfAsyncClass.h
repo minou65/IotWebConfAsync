@@ -47,6 +47,16 @@
 #include <IotWebConfWebServerWrapper.h>
 #include <vector>
 
+#if defined(IOTWEBCONFASYNC_DEBUG_TO_SERIAL)
+bool debugIotAsyncWebRequest = true;
+#else
+bool debugIotAsyncWebRequest = false;
+#endif
+
+#define DEBUGASYNC_PRINT(x) if (debugIotAsyncWebRequest) Serial.print(x) 
+#define DEBUGASYNC_PRINTLN(x) if (debugIotAsyncWebRequest) Serial.println(x)
+#define DEBUGASYNC_PRINTF(...) if (debugIotAsyncWebRequest) Serial.printf(__VA_ARGS__)
+
 
 class AsyncWebRequestWrapper : public iotwebconf::WebRequestWrapper {
 public:
@@ -104,19 +114,19 @@ public:
 	};
 
 	void send(int code, const char* content_type = nullptr, const String& content = String("")) override {
-		Serial.println("AsyncWebRequestWrapper::send");
-		Serial.print("    Code: "); Serial.println(code);
-		Serial.print("    Content type: "); Serial.println(content_type);
-		Serial.print("    Content: "); Serial.println(content);
-		Serial.print("    Content length: "); Serial.println(content.length());
+		DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::send");
+		DEBUGASYNC_PRINT("    Code: "); DEBUGASYNC_PRINTLN(code);
+		DEBUGASYNC_PRINT("    Content type: "); DEBUGASYNC_PRINTLN(content_type);
+		DEBUGASYNC_PRINT("    Content: "); DEBUGASYNC_PRINTLN(content);
+		DEBUGASYNC_PRINT("    Content length: "); DEBUGASYNC_PRINTLN(content.length());
 
 		try {
 			if (_isChunked) {
-				Serial.println("    Chunked response");
+				DEBUGASYNC_PRINTLN("    Chunked response");
 				_responseStream->print(content);
 			}
 			else {
-				Serial.println("    Non-chunked response");
+				DEBUGASYNC_PRINTLN("    Non-chunked response");
 				AsyncWebServerResponse* response_ = _request->beginResponse(code, content_type, content);
 				response_->addHeader("Server", "ESP Async Web Server");
 				response_->addHeader("Content-Length", content.length());
@@ -124,32 +134,32 @@ public:
 			}
 		}
 		catch (const std::exception& e) {
-			Serial.println(e.what());
+			DEBUGASYNC_PRINTLN(e.what());
 		}
 		catch (...) {
-			Serial.println("Unknown exception");
+			DEBUGASYNC_PRINTLN("Unknown exception");
 		}
 	};
 
 	void sendContent(const String& content) override {
-		Serial.println("AsyncWebRequestWrapper::sendContent");
+		DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::sendContent");
 
 		try {
-			Serial.print("Content length: "); Serial.println(content.length());
+			DEBUGASYNC_PRINT("Content length: "); DEBUGASYNC_PRINTLN(content.length());
 			_responseStream->print(content);
 		}
 		catch (const std::exception& e) {
-			Serial.println(e.what());
+			DEBUGASYNC_PRINTLN(e.what());
 		}
 		catch (...) {
-			Serial.println("Unknown exception");
+			DEBUGASYNC_PRINTLN("Unknown exception");
 		}
 
 	};
 
 	
 	void stop() override {
-		Serial.println("AsyncWebRequestWrapper::stop");
+		DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::stop");
 		_request->send(_responseStream);
 	};
 
