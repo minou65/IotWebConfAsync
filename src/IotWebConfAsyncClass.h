@@ -58,7 +58,6 @@ public:
 	};
 
 	~AsyncWebRequestWrapper() {
-
 	}
 
 	const String hostHeader() const override {
@@ -99,24 +98,29 @@ public:
 
 	void setContentLength(const size_t contentLength) override {
 		this->_contentLength = contentLength;
-		if (_contentLength == CONTENT_LENGTH_UNKNOWN) {
+		if (contentLength == CONTENT_LENGTH_UNKNOWN) {
 			_isChunked = true;
 		}
 	};
 
 	void send(int code, const char* content_type = nullptr, const String& content = String("")) override {
-		//Serial.println("AsyncWebRequestWrapper::send");
-		//Serial.print("    Code: "); Serial.println(code);
-		//Serial.print("    Content type: "); Serial.println(content_type);
-		//Serial.print("    Content: "); Serial.println(content);
-		//Serial.print("    Content length: "); Serial.println(content.length());
+		Serial.println("AsyncWebRequestWrapper::send");
+		Serial.print("    Code: "); Serial.println(code);
+		Serial.print("    Content type: "); Serial.println(content_type);
+		Serial.print("    Content: "); Serial.println(content);
+		Serial.print("    Content length: "); Serial.println(content.length());
 
 		try {
 			if (_isChunked) {
+				Serial.println("    Chunked response");
 				_responseStream->print(content);
 			}
 			else {
-				_responseStream->print(content);
+				Serial.println("    Non-chunked response");
+				AsyncWebServerResponse* response_ = _request->beginResponse(code, content_type, content);
+				response_->addHeader("Server", "ESP Async Web Server");
+				response_->addHeader("Content-Length", content.length());
+				_request->send(response_);
 			}
 		}
 		catch (const std::exception& e) {
@@ -128,7 +132,7 @@ public:
 	};
 
 	void sendContent(const String& content) override {
-		//Serial.println("AsyncWebRequestWrapper::sendContent");
+		Serial.println("AsyncWebRequestWrapper::sendContent");
 
 		try {
 			Serial.print("Content length: "); Serial.println(content.length());
@@ -145,7 +149,7 @@ public:
 
 	
 	void stop() override {
-		//Serial.println("AsyncWebRequestWrapper::stop");
+		Serial.println("AsyncWebRequestWrapper::stop");
 		_request->send(_responseStream);
 	};
 
