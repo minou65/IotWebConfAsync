@@ -78,6 +78,14 @@ void setup() {
 void loop() {
 	// -- doLoop should be called as frequently as possible.
 	iotWebConf.doLoop();
+
+	if (AsyncUpdater.isFinished()) {
+		// -- The firmware update has finished.
+		//    The device will reset after the update.
+		//    The user should not return from this function.
+		Serial.println("Firmware update finished.");
+		ESP.restart();
+	}
 }
 
 
