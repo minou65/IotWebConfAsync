@@ -41,8 +41,24 @@ size_t  contentlen;
 #endif
 
 #define emptyString F("")
+bool handleUpdatefinished = false;
+
 
 void handleUpload(AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final){
+    String html_ PROGMEM = R"(
+    <html>
+    <head>
+    <meta http-equiv="refresh" content="15; url=/">
+    <title>Rebooting...</title>
+    </head>
+    <body>
+    [Message]
+    <br>
+    You will be redirected to the homepage shortly.
+    </body>
+    </html>
+)";
+
     if (!index) {
         Serial.println("Update started...");
         size_t _contentlen = request->contentLength();
@@ -70,21 +86,18 @@ void handleUpload(AsyncWebServerRequest* request, const String& filename, size_t
     }
 
     if (final) {
-        AsyncWebServerResponse* response = request->beginResponse(302, "text/plain", "Please wait while the device reboots");
-        response->addHeader("Refresh", "15");
-        response->addHeader("Location", "/");
-        request->client()->setNoDelay(true); // Disable Nagle's algorithm so the client gets the 302 response immediately
-        request->send(response);
         if (!Update.end(true)) {
             Update.printError(Serial);
-            request->send(200, "text/plain", String(F("Update error: ")) + Update.getError());
+			html_.replace("[Message]", "Update error: " + Update.getError());
         }
         else {
-			delay(500);
-            Serial.println("Update completed. Will reboot esp");
-            Serial.flush();
-            ESP.restart();
+			html_.replace("[Message]", "Update completed. Please wait while the device is rebooting...");
+            Serial.println("Update completed. Please wait while the device is rebooting...");
+			handleUpdatefinished = true;
         }
+        AsyncWebServerResponse* response = request->beginResponse(200, "text/html", html_);
+        request->client()->setNoDelay(true); // Disable Nagle's algorithm so the client gets the 302 response immediately
+        request->send(response);
     }
 }
 
@@ -170,6 +183,18 @@ public:
         _password = password;
     }
 
+	bool isUpdating() {
+		return Update.isRunning();
+	}
+
+	String getUpdaterError() {
+		return _updaterError;
+	}
+
+	bool isFinished() {
+		return handleUpdatefinished;
+	}
+
 protected:
     void _setUpdaterError() {
         if (_serial_output) Update.printError(Serial);
@@ -222,7 +247,7 @@ private:
 		</table>
 	</body></html>  
 )";
-        
+       
 };
 
 /////////////////////////////////////////////////////////////////////////////////
