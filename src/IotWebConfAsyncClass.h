@@ -178,9 +178,9 @@ private:
 	int _bufferSize;
 
 
-	void beginResponseStream(int bufferSize = 1024) {
+	void beginResponseStream(int bufferSize = RESPONSE_STREAM_BUFFER_SIZE) {
 		if (bufferSize <= 0) {
-			bufferSize = 1024;
+			bufferSize = RESPONSE_STREAM_BUFFER_SIZE;
 		}
 		_responseStream = _request->beginResponseStream("text/html", bufferSize);
 		_bufferSize = bufferSize;
