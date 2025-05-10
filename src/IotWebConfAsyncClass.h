@@ -26,6 +26,8 @@
  *          use an ESPAsyncWebserver.
  * ********************************************************************/
 
+#define IOTWEBCONFASYNC_DEBUG_TO_SERIAL 0 // Set to 1 to enable debug output to serial
+
 #ifndef _IOTWEBCONFASYNCCLASS_h
 #define _IOTWEBCONFASYNCCLASS_h
 
@@ -47,7 +49,7 @@
 #include <IotWebConfWebServerWrapper.h>
 #include <vector>
 
-#if defined(IOTWEBCONFASYNC_DEBUG_TO_SERIAL)
+#if IOTWEBCONFASYNC_DEBUG_TO_SERIAL
 bool debugIotAsyncWebRequest = true;
 #else
 bool debugIotAsyncWebRequest = false;
@@ -60,10 +62,10 @@ bool debugIotAsyncWebRequest = false;
 
 class AsyncWebRequestWrapper : public iotwebconf::WebRequestWrapper {
 public:
-	AsyncWebRequestWrapper(AsyncWebServerRequest* request) {
+	AsyncWebRequestWrapper(AsyncWebServerRequest* request, int bufferSize = 2048) {
 		this->_request = request;
 
-		beginResponseStream(2048);
+		beginResponseStream(bufferSize);
 		sendHeader("Server", "ESP Async Web Server");
 	};
 
@@ -173,10 +175,13 @@ private:
 
 	bool _isChunked = false;
 	size_t _contentLength = CONTENT_LENGTH_UNKNOWN;
-	uint16_t _bufferSize = 1024;
+	int _bufferSize;
 
 
-	void beginResponseStream(uint8_t bufferSize = 1024) {
+	void beginResponseStream(int bufferSize = RESPONSE_STREAM_BUFFER_SIZE) {
+		if (bufferSize <= 0) {
+			bufferSize = RESPONSE_STREAM_BUFFER_SIZE;
+		}
 		_responseStream = _request->beginResponseStream("text/html", bufferSize);
 		_bufferSize = bufferSize;
 	}
