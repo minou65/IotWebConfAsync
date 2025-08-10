@@ -1,4 +1,4 @@
-/* IotWebConfAsyncClass.h
+﻿/* IotWebConfAsyncClass.h
  *
  * Copyright (c) 2024 Andreas Zogg
  *
@@ -48,6 +48,8 @@
 #include <ESPAsyncWebServer.h>
 #include <IotWebConfWebServerWrapper.h>
 #include <vector>
+#include <LittleFS.h>
+#include "esp_task_wdt.h"
 
 #if IOTWEBCONFASYNC_DEBUG_TO_SERIAL
 bool debugIotAsyncWebRequest = true;
@@ -59,15 +61,13 @@ bool debugIotAsyncWebRequest = false;
 #define DEBUGASYNC_PRINTLN(x) if (debugIotAsyncWebRequest) Serial.println(x)
 #define DEBUGASYNC_PRINTF(...) if (debugIotAsyncWebRequest) Serial.printf(__VA_ARGS__)
 
-
 class AsyncWebRequestWrapper : public iotwebconf::WebRequestWrapper {
 public:
-	AsyncWebRequestWrapper(AsyncWebServerRequest* request, int bufferSize = 2048) {
+	AsyncWebRequestWrapper(AsyncWebServerRequest* request) {
 		this->_request = request;
-
-		beginResponseStream(bufferSize);
 		sendHeader("Server", "ESP Async Web Server");
-	};
+		sendHeader(asyncsrv::T_Cache_Control, "public,max-age=60");
+	}
 
 	~AsyncWebRequestWrapper() {
 	}
@@ -105,7 +105,7 @@ public:
 	};
 
 	void sendHeader(const String& name, const String& value, bool first = false) override {
-		_responseStream->addHeader(name.c_str(), value.c_str());
+		_headers.push_back(std::make_pair(name, value));
 	};
 
 	void setContentLength(const size_t contentLength) override {
@@ -122,69 +122,66 @@ public:
 		DEBUGASYNC_PRINT("    Content: "); DEBUGASYNC_PRINTLN(content);
 		DEBUGASYNC_PRINT("    Content length: "); DEBUGASYNC_PRINTLN(content.length());
 
-		try {
-			if (_isChunked) {
-				DEBUGASYNC_PRINTLN("    Chunked response");
-				_responseStream->print(content);
+		if (_isChunked) {
+			DEBUGASYNC_PRINTLN("    Chunked response");
+			sendContent(content);
+		}
+		else {
+			DEBUGASYNC_PRINTLN("    Non-chunked response");
+			AsyncWebServerResponse* response_ = _request->beginResponse(code, content_type, content);
+			// add headers to the response
+			for (const auto& header_ : _headers) {
+				response_->addHeader(header_.first, header_.second);
 			}
-			else {
-				DEBUGASYNC_PRINTLN("    Non-chunked response");
-				AsyncWebServerResponse* response_ = _request->beginResponse(code, content_type, content);
-				response_->addHeader("Server", "ESP Async Web Server");
-				response_->addHeader("Content-Length", content.length());
-				_request->send(response_);
-			}
+			response_->addHeader("Content-Length", content.length());
+			_request->send(response_);
+			_headers.clear();
 		}
-		catch (const std::exception& e) {
-			DEBUGASYNC_PRINTLN(e.what());
-		}
-		catch (...) {
-			DEBUGASYNC_PRINTLN("Unknown exception");
-		}
+
 	};
 
 	void sendContent(const String& content) override {
 		DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::sendContent");
+		_content += content;
+	}
 
-		try {
-			DEBUGASYNC_PRINT("Content length: "); DEBUGASYNC_PRINTLN(content.length());
-			_responseStream->print(content);
-		}
-		catch (const std::exception& e) {
-			DEBUGASYNC_PRINTLN(e.what());
-		}
-		catch (...) {
-			DEBUGASYNC_PRINTLN("Unknown exception");
-		}
-
-	};
-
-	
 	void stop() override {
-		DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::stop");
-		_request->send(_responseStream);
-	};
+		Serial.println("AsyncWebRequestWrapper::stop");
+		Serial.print("    Content length: "); Serial.println(_content.length());
+		size_t len = _content.length();
+		if (len > 0) {
+			// create a response object
+			AsyncWebServerResponse* response_ = _request->beginResponse(200, "text/html", _content);
+
+			// add headers to the response
+			for (const auto& header : _headers) {
+				response_->addHeader(header.first, header.second);
+			}
+
+			// send the response
+			_request->send(response_);
+			_headers.clear();
+		} else {
+			DEBUGASYNC_PRINTLN("    No content to send");
+			// If no content, send a 204 No Content response
+			AsyncWebServerResponse* response_ = _request->beginResponse(204);
+			for (const auto& header : _headers) {
+				response_->addHeader(header.first, header.second);
+			}
+			_request->send(response_);
+			_headers.clear();
+		}
+	}
 
 protected:
 	AsyncWebServerRequest* _request;
-	AsyncResponseStream* _responseStream;
-
-
-private:
+	
 	AsyncWebRequestWrapper();
 
 	bool _isChunked = false;
 	size_t _contentLength = CONTENT_LENGTH_UNKNOWN;
-	int _bufferSize;
-
-
-	void beginResponseStream(int bufferSize = RESPONSE_STREAM_BUFFER_SIZE) {
-		if (bufferSize <= 0) {
-			bufferSize = RESPONSE_STREAM_BUFFER_SIZE;
-		}
-		_responseStream = _request->beginResponseStream("text/html", bufferSize);
-		_bufferSize = bufferSize;
-	}
+	String _content = "";
+	std::vector<std::pair<String, String>> _headers;
 
 	friend class IotWebConf;
 	friend class AsyncWebServerRequest;
@@ -203,6 +200,76 @@ private:
 
 	friend class IotWebConf;
 	friend class AsyncWebServer;
+};
+
+
+class AsyncWebRequestLittleFSWrapper : public AsyncWebRequestWrapper
+{
+public:
+	AsyncWebRequestLittleFSWrapper(AsyncWebServerRequest* request)
+		: AsyncWebRequestWrapper(request)
+	{}
+
+	~AsyncWebRequestLittleFSWrapper() {
+	}
+
+	void sendContent(const String& content) override {
+		if (_isChunked) {
+			if (!_file) {
+				_file = LittleFS.open("/myhtml.html", "a");
+				if (!_file) {
+					Serial.println("Error opening /myhtml.html!");
+					return;
+				}
+			}
+			else {
+				_file.print(content);
+				esp_task_wdt_reset();
+			}
+		}
+		else {
+			DEBUGASYNC_PRINTLN("    Non-chunked response");
+			AsyncWebRequestWrapper::sendContent(content);
+		}
+	}
+
+	void stop() override {
+		if (_isChunked) {
+			_file.close();
+
+			File file = LittleFS.open("/myhtml.html", "r");
+			if (file) {
+				AsyncWebServerResponse* response = _request->beginChunkedResponse(
+					"text/html",
+					[file](uint8_t* buffer, size_t maxLen, size_t index) mutable -> size_t {
+						size_t bytesRead = file.read(buffer, maxLen);
+						if (bytesRead == 0) {
+							file.close();
+							LittleFS.remove("/myhtml.html");
+						}
+						return bytesRead;
+					}
+				);
+
+				for (const auto& header : _headers) {
+					response->addHeader(header.first, header.second);
+				}
+				_request->send(response);
+				_headers.clear();
+			}
+			else {
+				Serial.println("File /myhtml.html not found!");
+				_request->send(404, "text/plain", "File not found: /myhtml.html");
+			}
+
+		}
+		else {
+			AsyncWebRequestWrapper::stop();
+		}
+	}
+
+protected:
+	File _file;
 };
 
 #endif
