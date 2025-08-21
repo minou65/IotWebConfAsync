@@ -146,8 +146,8 @@ public:
 	}
 
 	void stop() override {
-		Serial.println("AsyncWebRequestWrapper::stop");
-		Serial.print("    Content length: "); Serial.println(_content.length());
+		DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::stop");
+		DEBUGASYNC_PRINT("    Content length: "); DEBUGASYNC_PRINTLN(_content.length());
 		size_t len = _content.length();
 		if (len > 0) {
 			// create a response object
