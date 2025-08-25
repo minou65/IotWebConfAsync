@@ -26,7 +26,7 @@
  *          use an ESPAsyncWebserver.
  * ********************************************************************/
 
-#define IOTWEBCONFASYNC_DEBUG_TO_SERIAL 0 // Set to 1 to enable debug output to serial
+#define IOTWEBCONFASYNC_DEBUG_TO_SERIAL 1 // Set to 1 to enable debug output to serial
 
 #ifndef _IOTWEBCONFASYNCCLASS_h
 #define _IOTWEBCONFASYNCCLASS_h
@@ -63,13 +63,23 @@ bool debugIotAsyncWebRequest = false;
 
 class AsyncWebRequestWrapper : public iotwebconf::WebRequestWrapper {
 public:
-	AsyncWebRequestWrapper(AsyncWebServerRequest* request) {
-		this->_request = request;
+	AsyncWebRequestWrapper(AsyncWebServerRequest* request) :
+		_request(request),
+		_response(nullptr),
+		_bufferIndex(0),
+		_bufferRead(0),
+		_isChunked(false),
+		_responseSent(false)
+	{
 		sendHeader("Server", "ESP Async Web Server");
 		sendHeader(asyncsrv::T_Cache_Control, "public,max-age=60");
 	}
 
 	~AsyncWebRequestWrapper() {
+		if (_buffer != nullptr) {
+			delete[] _buffer;
+			_buffer = nullptr;
+		}
 	}
 
 	const String hostHeader() const override {
@@ -112,8 +122,14 @@ public:
 		this->_contentLength = contentLength;
 		if (contentLength == CONTENT_LENGTH_UNKNOWN) {
 			_isChunked = true;
+			if (_buffer == nullptr) {
+				_buffer = new char[BUFFER_SIZE];
+				_bufferIndex = 0;
+				_bufferRead = 0;
+				memset(_buffer, 0, BUFFER_SIZE);
+			}
 		}
-	};
+	}
 
 	void send(int code, const char* content_type = nullptr, const String& content = String("")) override {
 		DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::send");
@@ -122,66 +138,135 @@ public:
 		DEBUGASYNC_PRINT("    Content: "); DEBUGASYNC_PRINTLN(content);
 		DEBUGASYNC_PRINT("    Content length: "); DEBUGASYNC_PRINTLN(content.length());
 
+		if (_responseSent) return;
+
+		const char* type = content_type ? content_type : "text/html";
+
 		if (_isChunked) {
-			DEBUGASYNC_PRINTLN("    Chunked response");
-			sendContent(content);
+			// Nur beim ersten Mal erzeugen!
+			if (_response == nullptr) {
+				DEBUGASYNC_PRINTLN("    Initialize chunked response");
+				// Chunked response initialisieren
+				_response = new AsyncChunkedResponse(type, [this](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+					return this->readChunk(buffer, maxLen);
+					});
+
+				// Header vor send() setzen!
+				for (auto& h : _headers) {
+					_response->addHeader(h.first, h.second);
+				}
+				_response->setCode(code);
+				_request->send(_response);
+				_responseSent = true;
+			}
 		}
 		else {
-			DEBUGASYNC_PRINTLN("    Non-chunked response");
-			AsyncWebServerResponse* response_ = _request->beginResponse(code, content_type, content);
-			// add headers to the response
-			for (const auto& header_ : _headers) {
-				response_->addHeader(header_.first, header_.second);
-			}
-			response_->addHeader("Content-Length", content.length());
-			_request->send(response_);
-			_headers.clear();
-		}
+			// Fixed-length response
+			AsyncResponseStream* stream = _request->beginResponseStream(type);
+			stream->setCode(code);
+			stream->setContentLength(_contentLength);
+			stream->print(content);
 
-	};
+			for (auto& h : _headers) {
+				stream->addHeader(h.first, h.second);
+			}
+			stream->setCode(code);
+			_request->send(stream);
+			_responseSent = true;
+		}
+	}
 
 	void sendContent(const String& content) override {
+		if (_buffer == nullptr) {
+			DEBUGASYNC_PRINTLN("Fehler: Buffer nicht initialisiert!");
+			return;
+		}
+		size_t len = content.length();
+		size_t written = 0;
+
 		DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::sendContent");
-		_content += content;
+		DEBUGASYNC_PRINT("    Content length: "); DEBUGASYNC_PRINTLN(len);
+
+		while (written < len) {
+			size_t space = availableSpace();
+			if (space == 0) {
+				waitForBufferSpace(1); // Warte, bis wieder Platz ist
+				continue;
+			}
+			size_t toWrite = std::min(space, len - written);
+			memcpy(_buffer + _bufferIndex, content.c_str() + written, toWrite);
+			_bufferIndex += toWrite;
+			written += toWrite;
+			DEBUGASYNC_PRINT("    Buffer index nach write: "); DEBUGASYNC_PRINTLN(_bufferIndex);
+		}
 	}
 
 	void stop() override {
 		DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::stop");
-		DEBUGASYNC_PRINT("    Content length: "); DEBUGASYNC_PRINTLN(_content.length());
-		size_t len = _content.length();
-		if (len > 0) {
-			// create a response object
-			AsyncWebServerResponse* response_ = _request->beginResponse(200, "text/html", _content);
-
-			// add headers to the response
-			for (const auto& header : _headers) {
-				response_->addHeader(header.first, header.second);
-			}
-
-			// send the response
-			_request->send(response_);
-			_headers.clear();
-		} else {
-			DEBUGASYNC_PRINTLN("    No content to send");
-			// If no content, send a 204 No Content response
-			AsyncWebServerResponse* response_ = _request->beginResponse(204);
-			for (const auto& header : _headers) {
-				response_->addHeader(header.first, header.second);
-			}
-			_request->send(response_);
-			_headers.clear();
-		}
+		_finished = true; // Signalisiere readChunk das Ende
 	}
 
 protected:
 	AsyncWebServerRequest* _request;
-	
-	AsyncWebRequestWrapper();
-
-	bool _isChunked = false;
-	size_t _contentLength = CONTENT_LENGTH_UNKNOWN;
-	String _content = "";
+	AsyncWebServerResponse* _response = nullptr;
 	std::vector<std::pair<String, String>> _headers;
+	size_t _contentLength;
+	bool _isChunked;
+	bool _responseSent;
+	bool _finished = false;
+	char* _buffer = nullptr;
+	size_t _bufferIndex = 0;
+	size_t _bufferRead = 0;
+	static constexpr size_t BUFFER_SIZE = 90000;
+
+	size_t availableSpace() const {
+		return BUFFER_SIZE - _bufferIndex;
+	}
+
+	void waitForBufferSpace(size_t neededSpace) {
+		while (availableSpace() < neededSpace) {
+			yield(); // Kurzes Warten, damit der Event-Loop weiterläuft
+			esp_task_wdt_reset();
+		}
+	}
+
+	size_t readChunk(uint8_t* buffer, size_t maxLen) {
+		DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::readChunk");
+		if (_buffer == nullptr) {
+			DEBUGASYNC_PRINTLN("  Fehler: Buffer nicht initialisiert!");
+			return 0;
+		}
+		size_t available = _bufferIndex - _bufferRead;
+		DEBUGASYNC_PRINT("  Buffer-Status: _bufferIndex="); DEBUGASYNC_PRINT(_bufferIndex);
+		DEBUGASYNC_PRINT(", _bufferRead="); DEBUGASYNC_PRINT(_bufferRead);
+		DEBUGASYNC_PRINT(", available="); DEBUGASYNC_PRINTLN(available);
+		DEBUGASYNC_PRINT("  maxLen: "); DEBUGASYNC_PRINTLN(maxLen);
+
+		if (available == 0) {
+			if (_finished) {
+				DEBUGASYNC_PRINTLN("  Buffer leer und Übertragung abgeschlossen, Objekt wird gelöscht.");
+				delete this;
+			}
+			else {
+				DEBUGASYNC_PRINTLN("  Keine Daten im Buffer (Ende oder warten auf mehr Daten)");
+			}
+			return 0;
+		}
+		size_t len = std::min(maxLen, available);
+		DEBUGASYNC_PRINT("  Übertrage Bytes: "); DEBUGASYNC_PRINTLN(len);
+
+		memcpy(buffer, _buffer + _bufferRead, len);
+		_bufferRead += len;
+
+		DEBUGASYNC_PRINT("  Neuer _bufferRead: "); DEBUGASYNC_PRINTLN(_bufferRead);
+
+		if (_bufferRead == _bufferIndex) {
+			DEBUGASYNC_PRINTLN("  Buffer geleert, Zeiger zurücksetzen.");
+			_bufferRead = 0;
+			_bufferIndex = 0;
+		}
+		return len;
+	}
 
 	friend class IotWebConf;
 	friend class AsyncWebServerRequest;
@@ -195,8 +280,8 @@ public:
 	void begin() override { this->_server->begin(); };
 
 private:
-	AsyncWebServerWrapper() {};
 	AsyncWebServer* _server;
+	AsyncWebServerWrapper() {};
 
 	friend class IotWebConf;
 	friend class AsyncWebServer;
