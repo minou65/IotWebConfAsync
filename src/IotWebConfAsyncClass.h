@@ -67,16 +67,17 @@ bool debugIotAsyncWebRequest = false;
 class AsyncWebRequestWrapper : public iotwebconf::WebRequestWrapper
 {
 public:
-    explicit AsyncWebRequestWrapper(AsyncWebServerRequest* request)
+    explicit AsyncWebRequestWrapper(AsyncWebServerRequest* request, size_t bufferSize = 2048)
         : _request(request),
-        _response(nullptr),
+        response_(nullptr),
         _contentLength(0),
         _isChunked(false),
         _responseSent(false),
         _finished(false),
         _buffer(nullptr),
         _bufferIndex(0),
-        _bufferRead(0)
+        _bufferRead(0),
+        _bufferSize(bufferSize)
     {
         sendHeader("Server", "ESP Async Web Server");
         sendHeader(asyncsrv::T_Cache_Control, "public,max-age=60");
@@ -113,7 +114,7 @@ public:
             _isChunked = true;
             if (_buffer == nullptr)
             {
-                _buffer = new char[BUFFER_SIZE]();
+                _buffer = new char[_bufferSize]();
                 _bufferIndex = 0;
                 _bufferRead = 0;
             }
@@ -134,15 +135,15 @@ public:
 
         if (_isChunked)
         {
-            if (_response == nullptr)
+            if (response_ == nullptr)
             {
                 DEBUGASYNC_PRINTLN("    Initialize chunked response");
-                _response = new AsyncChunkedResponse(type, [this](uint8_t* buffer, size_t maxLen, size_t) {
+                response_ = new AsyncChunkedResponse(type, [this](uint8_t* buffer, size_t maxLen, size_t) {
                     return this->readChunk(buffer, maxLen);
                     });
-                for (const auto& h : _headers) _response->addHeader(h.first, h.second);
-                _response->setCode(code);
-                _request->send(_response);
+                for (const auto& h : _headers) response_->addHeader(h.first, h.second);
+                response_->setCode(code);
+                _request->send(response_);
                 _responseSent = true;
             }
         }
@@ -195,7 +196,7 @@ public:
 
 protected:
     AsyncWebServerRequest* _request;
-    AsyncWebServerResponse* _response;
+    AsyncWebServerResponse* response_;
     std::vector<std::pair<String, String>> _headers;
     size_t _contentLength;
     bool _isChunked;
@@ -204,9 +205,9 @@ protected:
     char* _buffer;
     size_t _bufferIndex;
     size_t _bufferRead;
-    static constexpr size_t BUFFER_SIZE = 90000;
+    size_t _bufferSize;;
 
-    size_t availableSpace() const { return BUFFER_SIZE - _bufferIndex; }
+    size_t availableSpace() const { return _bufferSize - _bufferIndex; }
 
     void waitForBufferSpace(size_t neededSpace)
     {
