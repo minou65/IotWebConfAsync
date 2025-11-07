@@ -50,11 +50,11 @@
 
 #include <ESPAsyncWebServer.h>
 #include <IotWebConfWebServerWrapper.h>
-#include <vector>
+#include <queue>
 #include <LittleFS.h>
 #include "esp_task_wdt.h"
 
-#if IOTWEBCONFASYNC_DEBUG_TO_SERIAL == 1
+#if IOTWEBCONFASYNC_DEBUG_TO_SERIAL == 0
 bool debugIotAsyncWebRequest = true;
 #else
 bool debugIotAsyncWebRequest = false;
@@ -69,28 +69,16 @@ class AsyncWebRequestWrapper : public iotwebconf::WebRequestWrapper
 public:
     explicit AsyncWebRequestWrapper(AsyncWebServerRequest* request, size_t bufferSize = 2048)
         : _request(request),
-        response_(nullptr),
+        _reponse(nullptr),
         _contentLength(0),
         _isChunked(false),
         _responseSent(false),
-        _finished(false),
-        _buffer(nullptr),
-        _bufferIndex(0),
-        _bufferRead(0),
-        _bufferSize(bufferSize)
-    {
+        _finished(false) {
         sendHeader("Server", "ESP Async Web Server");
         sendHeader(asyncsrv::T_Cache_Control, "public,max-age=60");
     }
 
-    ~AsyncWebRequestWrapper()
-    {
-        if (_buffer != nullptr)
-        {
-            delete[] _buffer;
-            _buffer = nullptr;
-        }
-    }
+    ~AsyncWebRequestWrapper(){}
 
     const String hostHeader() const override { return _request->host(); }
     IPAddress localIP() override { return _request->client()->localIP(); }
@@ -106,23 +94,14 @@ public:
         _headers.emplace_back(name, value);
     }
 
-    void setContentLength(const size_t contentLength) override
-    {
+    void setContentLength(const size_t contentLength) override {
         _contentLength = contentLength;
-        if (contentLength == CONTENT_LENGTH_UNKNOWN)
-        {
+        if (contentLength == CONTENT_LENGTH_UNKNOWN) {
             _isChunked = true;
-            if (_buffer == nullptr)
-            {
-                _buffer = new char[_bufferSize]();
-                _bufferIndex = 0;
-                _bufferRead = 0;
-            }
         }
     }
 
-    void send(int code, const char* content_type = nullptr, const String& content = String("")) override
-    {
+    void send(int code, const char* content_type = nullptr, const String& content = String("")) override {
         DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::send");
         DEBUGASYNC_PRINT("    Code: "); DEBUGASYNC_PRINTLN(code);
         DEBUGASYNC_PRINT("    Content type: "); DEBUGASYNC_PRINTLN(content_type);
@@ -130,25 +109,20 @@ public:
         DEBUGASYNC_PRINT("    Content length: "); DEBUGASYNC_PRINTLN(content.length());
 
         if (_responseSent) return;
-
         const char* type = content_type ? content_type : "text/html";
 
-        if (_isChunked)
-        {
-            if (response_ == nullptr)
-            {
-                DEBUGASYNC_PRINTLN("    Initialize chunked response");
-                response_ = new AsyncChunkedResponse(type, [this](uint8_t* buffer, size_t maxLen, size_t) {
+        if (_isChunked) {
+            if (_reponse == nullptr) {
+                _reponse = new AsyncChunkedResponse(type, [this](uint8_t* buffer, size_t maxLen, size_t) {
                     return this->readChunk(buffer, maxLen);
                     });
-                for (const auto& h : _headers) response_->addHeader(h.first, h.second);
-                response_->setCode(code);
-                _request->send(response_);
+                for (const auto& h : _headers) _reponse->addHeader(h.first, h.second);
+                _reponse->setCode(code);
+                _request->send(_reponse);
                 _responseSent = true;
             }
         }
-        else
-        {
+        else {
             auto* stream = _request->beginResponseStream(type);
             stream->setCode(code);
             stream->setContentLength(_contentLength);
@@ -159,107 +133,59 @@ public:
         }
     }
 
-    void sendContent(const String& content) override
-    {
-        if (_buffer == nullptr)
-        {
-            DEBUGASYNC_PRINTLN("Error: Buffer not initialized!");
-            return;
-        }
-        size_t len = content.length();
-        size_t written = 0;
-
+    void sendContent(const String& content) override {
         DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::sendContent");
-        DEBUGASYNC_PRINT("    Content length: "); DEBUGASYNC_PRINTLN(len);
+        DEBUGASYNC_PRINT("    Content length: "); DEBUGASYNC_PRINTLN(content.length());
 
-        while (written < len)
-        {
-            size_t space = availableSpace();
-            if (space == 0)
-            {
-                waitForBufferSpace(1);
-                continue;
-            }
-            size_t toWrite = std::min(space, len - written);
-            memcpy(_buffer + _bufferIndex, content.c_str() + written, toWrite);
-            _bufferIndex += toWrite;
-            written += toWrite;
-            DEBUGASYNC_PRINT("    Buffer index after write: "); DEBUGASYNC_PRINTLN(_bufferIndex);
+        if (_isChunked) {
+            _chunkQueue.push(content);
         }
     }
 
-    void stop() override
-    {
+    void stop() override {
         DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::stop");
         _finished = true;
     }
 
 protected:
     AsyncWebServerRequest* _request;
-    AsyncWebServerResponse* response_;
+    AsyncWebServerResponse* _reponse;
     std::vector<std::pair<String, String>> _headers;
     size_t _contentLength;
     bool _isChunked;
     bool _responseSent;
     bool _finished;
-    char* _buffer;
-    size_t _bufferIndex;
-    size_t _bufferRead;
-    size_t _bufferSize;;
+    std::queue<String> _chunkQueue;
 
-    size_t availableSpace() const { return _bufferSize - _bufferIndex; }
-
-    void waitForBufferSpace(size_t neededSpace)
-    {
-        while (availableSpace() < neededSpace)
-        {
-            yield();
-            esp_task_wdt_reset();
-        }
-    }
-
-    size_t readChunk(uint8_t* buffer, size_t maxLen)
-    {
+    size_t readChunk(uint8_t* buffer, size_t maxLen) {
         DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::readChunk");
-        if (_buffer == nullptr)
-        {
-            DEBUGASYNC_PRINTLN("  Error: Buffer not initialized!");
-            return 0;
-        }
-        size_t available = _bufferIndex - _bufferRead;
-        DEBUGASYNC_PRINT("  Buffer status: _bufferIndex="); DEBUGASYNC_PRINT(_bufferIndex);
-        DEBUGASYNC_PRINT(", _bufferRead="); DEBUGASYNC_PRINT(_bufferRead);
-        DEBUGASYNC_PRINT(", available="); DEBUGASYNC_PRINTLN(available);
-        DEBUGASYNC_PRINT("  maxLen: "); DEBUGASYNC_PRINTLN(maxLen);
+        DEBUGASYNC_PRINT("    Max length requested: "); DEBUGASYNC_PRINTLN(maxLen);
 
-        if (available == 0)
-        {
-            if (_finished)
-            {
-                DEBUGASYNC_PRINTLN("  Buffer empty and transfer finished, deleting object.");
-                delete this;
+        size_t totalLen = 0;
+        // Füge so viele Chunks wie möglich zusammen, bis maxLen erreicht ist oder die Queue leer ist
+        while (!_chunkQueue.empty() && totalLen < maxLen) {
+            String& chunk = _chunkQueue.front();
+            size_t copyLen = std::min(maxLen - totalLen, chunk.length());
+            memcpy(buffer + totalLen, chunk.c_str(), copyLen);
+            totalLen += copyLen;
+
+            if (copyLen < chunk.length()) {
+                chunk = chunk.substring(copyLen);
             }
-            else
-            {
-                DEBUGASYNC_PRINTLN("  No data in buffer (waiting for more data or end).");
+            else {
+                _chunkQueue.pop();
             }
-            return 0;
         }
-        size_t len = std::min(maxLen, available);
-        DEBUGASYNC_PRINT("  Transferring bytes: "); DEBUGASYNC_PRINTLN(len);
 
-        memcpy(buffer, _buffer + _bufferRead, len);
-        _bufferRead += len;
+        DEBUGASYNC_PRINTLN("    Returning chunk of length: " + String(totalLen));
 
-        DEBUGASYNC_PRINT("  New _bufferRead: "); DEBUGASYNC_PRINTLN(_bufferRead);
-
-        if (_bufferRead == _bufferIndex)
-        {
-            DEBUGASYNC_PRINTLN("  Buffer emptied, resetting pointers.");
-            _bufferRead = 0;
-            _bufferIndex = 0;
+        // Wenn keine Daten mehr und Übertragung beendet, Objekt löschen
+        if (_chunkQueue.empty() && _finished) {
+            DEBUGASYNC_PRINTLN("    No more chunks, finishing response");
+            //delete this;
         }
-        return len;
+
+        return totalLen;
     }
 
     friend class IotWebConf;
