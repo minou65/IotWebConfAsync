@@ -40,6 +40,10 @@
 #include "WProgram.h"
 #endif
 
+#include <ESPAsyncWebServer.h>
+#include <IotWebConfWebServerWrapper.h>
+#include <queue>
+
 #ifdef ESP8266
 #include <ESPAsyncTCP.h>
 #include <Updater.h>
@@ -47,12 +51,6 @@
 #include <AsyncTCP.h>
 #include <Update.h>
 #endif
-
-#include <ESPAsyncWebServer.h>
-#include <IotWebConfWebServerWrapper.h>
-#include <queue>
-#include <LittleFS.h>
-#include "esp_task_wdt.h"
 
 #if IOTWEBCONFASYNC_DEBUG_TO_SERIAL == 0
 bool debugIotAsyncWebRequest = true;
@@ -67,18 +65,14 @@ bool debugIotAsyncWebRequest = false;
 class AsyncWebRequestWrapper : public iotwebconf::WebRequestWrapper
 {
 public:
-    explicit AsyncWebRequestWrapper(AsyncWebServerRequest* request, size_t bufferSize = 2048)
-        : _request(request),
-        _reponse(nullptr),
-        _contentLength(0),
-        _isChunked(false),
-        _responseSent(false),
-        _finished(false) {
-        sendHeader("Server", "ESP Async Web Server");
-        sendHeader(asyncsrv::T_Cache_Control, "public,max-age=60");
-    }
-
+    explicit AsyncWebRequestWrapper(AsyncWebServerRequest* request);
     ~AsyncWebRequestWrapper(){}
+
+	void send(int code, const char* content_type = nullptr, const String& content = String("")) override;
+    void sendHeader(const String& name, const String& value, bool first = false) override;
+    void sendContent(const String& content) override;
+    void setContentLength(const size_t contentLength) override;
+    void stop() override;
 
     const String hostHeader() const override { return _request->host(); }
     IPAddress localIP() override { return _request->client()->localIP(); }
@@ -89,63 +83,7 @@ public:
     bool hasArg(const String& name) override { return _request->hasArg(name.c_str()); }
     String arg(const String name) override { return _request->arg(name); }
 
-    void sendHeader(const String& name, const String& value, bool first = false) override
-    {
-        _headers.emplace_back(name, value);
-    }
-
-    void setContentLength(const size_t contentLength) override {
-        _contentLength = contentLength;
-        if (contentLength == CONTENT_LENGTH_UNKNOWN) {
-            _isChunked = true;
-        }
-    }
-
-    void send(int code, const char* content_type = nullptr, const String& content = String("")) override {
-        DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::send");
-        DEBUGASYNC_PRINT("    Code: "); DEBUGASYNC_PRINTLN(code);
-        DEBUGASYNC_PRINT("    Content type: "); DEBUGASYNC_PRINTLN(content_type);
-        DEBUGASYNC_PRINT("    Content: "); DEBUGASYNC_PRINTLN(content);
-        DEBUGASYNC_PRINT("    Content length: "); DEBUGASYNC_PRINTLN(content.length());
-
-        if (_responseSent) return;
-        const char* type = content_type ? content_type : "text/html";
-
-        if (_isChunked) {
-            if (_reponse == nullptr) {
-                _reponse = new AsyncChunkedResponse(type, [this](uint8_t* buffer, size_t maxLen, size_t) {
-                    return this->readChunk(buffer, maxLen);
-                    });
-                for (const auto& h : _headers) _reponse->addHeader(h.first, h.second);
-                _reponse->setCode(code);
-                _request->send(_reponse);
-                _responseSent = true;
-            }
-        }
-        else {
-            auto* stream = _request->beginResponseStream(type);
-            stream->setCode(code);
-            stream->setContentLength(_contentLength);
-            stream->print(content);
-            for (const auto& h : _headers) stream->addHeader(h.first, h.second);
-            _request->send(stream);
-            _responseSent = true;
-        }
-    }
-
-    void sendContent(const String& content) override {
-        DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::sendContent");
-        DEBUGASYNC_PRINT("    Content length: "); DEBUGASYNC_PRINTLN(content.length());
-
-        if (_isChunked) {
-            _chunkQueue.push(content);
-        }
-    }
-
-    void stop() override {
-        DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::stop");
-        _finished = true;
-    }
+    bool readyToDelete() const;
 
 protected:
     AsyncWebServerRequest* _request;
@@ -155,126 +93,13 @@ protected:
     bool _isChunked;
     bool _responseSent;
     bool _finished;
+    bool _readyToDelete = false;
     std::queue<String> _chunkQueue;
 
-    size_t readChunk(uint8_t* buffer, size_t maxLen) {
-        DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::readChunk");
-        DEBUGASYNC_PRINT("    Max length requested: "); DEBUGASYNC_PRINTLN(maxLen);
-
-        size_t totalLen = 0;
-        // Füge so viele Chunks wie möglich zusammen, bis maxLen erreicht ist oder die Queue leer ist
-        while (!_chunkQueue.empty() && totalLen < maxLen) {
-            String& chunk = _chunkQueue.front();
-            size_t copyLen = std::min(maxLen - totalLen, chunk.length());
-            memcpy(buffer + totalLen, chunk.c_str(), copyLen);
-            totalLen += copyLen;
-
-            if (copyLen < chunk.length()) {
-                chunk = chunk.substring(copyLen);
-            }
-            else {
-                _chunkQueue.pop();
-            }
-        }
-
-        DEBUGASYNC_PRINTLN("    Returning chunk of length: " + String(totalLen));
-
-        // Wenn keine Daten mehr und Übertragung beendet, Objekt löschen
-        if (_chunkQueue.empty() && _finished) {
-            DEBUGASYNC_PRINTLN("    No more chunks, finishing response");
-            //delete this;
-        }
-
-        return totalLen;
-    }
+    size_t readChunk(uint8_t* buffer, size_t maxLen);
 
     friend class IotWebConf;
     friend class AsyncWebServerRequest;
-};
-
-class AsyncWebRequestLittleFSWrapper : public AsyncWebRequestWrapper
-{
-public:
-    explicit AsyncWebRequestLittleFSWrapper(AsyncWebServerRequest* request)
-        : AsyncWebRequestWrapper(request)
-    {
-    }
-
-    ~AsyncWebRequestLittleFSWrapper()
-    {
-        if (_file) {
-            _file.close();
-        }
-    }
-
-    void sendContent(const String& content) override
-    {
-        if (_isChunked)
-        {
-            if (!_file)
-            {
-                _file = LittleFS.open("/myhtml.html", "a");
-                if (!_file)
-                {
-                    Serial.println("Error opening /myhtml.html!");
-                    return;
-                }
-            }
-            _file.print(content);
-            esp_task_wdt_reset();
-        }
-        else
-        {
-            DEBUGASYNC_PRINTLN("    Non-chunked response");
-            AsyncWebRequestWrapper::sendContent(content);
-        }
-    }
-
-    void stop() override
-    {
-        if (_isChunked)
-        {
-            if (_file) {
-                _file.close();
-            }
-
-            File file = LittleFS.open("/myhtml.html", "r");
-            if (file)
-            {
-                AsyncWebServerResponse* response = _request->beginChunkedResponse(
-                    "text/html",
-                    [file](uint8_t* buffer, size_t maxLen, size_t) mutable -> size_t {
-                        size_t bytesRead = file.read(buffer, maxLen);
-                        if (bytesRead == 0)
-                        {
-                            file.close();
-                            LittleFS.remove("/myhtml.html");
-                        }
-                        return bytesRead;
-                    }
-                );
-
-                for (const auto& header : _headers)
-                {
-                    response->addHeader(header.first, header.second);
-                }
-                _request->send(response);
-                _headers.clear();
-            }
-            else
-            {
-                Serial.println("File /myhtml.html not found!");
-                _request->send(404, "text/plain", "File not found: /myhtml.html");
-            }
-        }
-        else
-        {
-            AsyncWebRequestWrapper::stop();
-        }
-    }
-
-protected:
-    File _file;
 };
 
 class AsyncWebServerWrapper : public iotwebconf::WebServerWrapper {
@@ -283,6 +108,8 @@ public:
 
 	void handleClient() override {};
 	void begin() override { this->_server->begin(); };
+
+    void cleanupWrappers() override;
 
 private:
 	AsyncWebServer* _server;
