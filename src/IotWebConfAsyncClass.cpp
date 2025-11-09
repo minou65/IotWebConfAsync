@@ -4,11 +4,17 @@
 #define CONTENT_LENGTH_UNKNOWN ((size_t)-1)
 #endif
 
-std::vector<AsyncWebRequestWrapper*> wrapperList;
+#if IOTWEBCONFASYNC_DEBUG_TO_SERIAL == 0
+bool debugIotAsyncWebRequest = true;
+#else
+bool debugIotAsyncWebRequest = false;
+#endif
+
+std::vector<std::unique_ptr<AsyncWebRequestWrapper>> wrapperList;
 
 AsyncWebRequestWrapper::AsyncWebRequestWrapper(AsyncWebServerRequest* request) :
     _request(request),
-    _reponse(nullptr),
+    _response(nullptr),
     _contentLength(0),
     _isChunked(false),
     _responseSent(false),
@@ -16,7 +22,7 @@ AsyncWebRequestWrapper::AsyncWebRequestWrapper(AsyncWebServerRequest* request) :
 {
     sendHeader("Server", "ESP Async Web Server");
     sendHeader(asyncsrv::T_Cache_Control, "public,max-age=60");
-    wrapperList.push_back(this);
+    wrapperList.push_back(std::unique_ptr<AsyncWebRequestWrapper>(this));
 }
 
 void AsyncWebRequestWrapper::send(int code, const char* content_type, const String& content) {
@@ -29,14 +35,22 @@ void AsyncWebRequestWrapper::send(int code, const char* content_type, const Stri
     if (_responseSent) return;
     const char* type = content_type ? content_type : "text/html";
 
+    _request->onDisconnect([this]() {
+        auto it = std::find_if(wrapperList.begin(), wrapperList.end(),
+            [this](const std::unique_ptr<AsyncWebRequestWrapper>& ptr) { return ptr.get() == this; });
+        if (it != wrapperList.end()) {
+            wrapperList.erase(it);
+        }
+        });
+
     if (_isChunked) {
-        if (_reponse == nullptr) {
-            _reponse = new AsyncChunkedResponse(type, [this](uint8_t* buffer, size_t maxLen, size_t) {
+        if (_response == nullptr) {
+            _response = new AsyncChunkedResponse(type, [this](uint8_t* buffer, size_t maxLen, size_t) {
                 return this->readChunk(buffer, maxLen);
                 });
-            for (const auto& h : _headers) _reponse->addHeader(h.first, h.second);
-            _reponse->setCode(code);
-            _request->send(_reponse);
+            for (const auto& h : _headers) _response->addHeader(h.first, h.second);
+            _response->setCode(code);
+            _request->send(_response);
             _responseSent = true;
         }
     }
@@ -75,12 +89,11 @@ void AsyncWebRequestWrapper::stop() {
     DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::stop");
     _finished = true;
     if (!_isChunked) {
-        _readyToDelete = true;
+        if (_deleteReadyTimestamp == 0) {
+            _deleteReadyTimestamp = millis();
+            DEBUGASYNC_PRINTLN("    Marked for deletion, waiting for safe cleanup");
+        }
     }
-}
-
-bool AsyncWebRequestWrapper::readyToDelete() const {
-    return _readyToDelete;
 }
 
 size_t AsyncWebRequestWrapper::readChunk(uint8_t* buffer, size_t maxLen) {
@@ -88,7 +101,7 @@ size_t AsyncWebRequestWrapper::readChunk(uint8_t* buffer, size_t maxLen) {
     DEBUGASYNC_PRINT("    Max length requested: "); DEBUGASYNC_PRINTLN(maxLen);
 
     size_t totalLen = 0;
-    // Füge so viele Chunks wie möglich zusammen, bis maxLen erreicht ist oder die Queue leer ist
+    // Combine as many chunks as possible until maxLen is reached or the queue is empty
     while (!_chunkQueue.empty() && totalLen < maxLen) {
         String& chunk = _chunkQueue.front();
         size_t copyLen = std::min(maxLen - totalLen, chunk.length());
@@ -105,23 +118,10 @@ size_t AsyncWebRequestWrapper::readChunk(uint8_t* buffer, size_t maxLen) {
 
     DEBUGASYNC_PRINTLN("    Returning chunk of length: " + String(totalLen));
 
-    // Wenn keine Daten mehr und Übertragung beendet, Objekt löschen
-    if (_chunkQueue.empty() && _finished) {
-        _readyToDelete = true;
-        DEBUGASYNC_PRINTLN("    No more chunks, finishing response");
+    // Only set readyToDelete if finished AND no more data AND this was the last call (totalLen == 0)
+    if (_chunkQueue.empty() && _finished && totalLen == 0) {
+        DEBUGASYNC_PRINTLN("    Marked for deletion, waiting for safe cleanup");
     }
 
     return totalLen;
-}
-
-void AsyncWebServerWrapper::cleanupWrappers() {
-    for (auto it = wrapperList.begin(); it != wrapperList.end(); ) {
-        if ((*it)->readyToDelete()) {
-            delete* it;
-            it = wrapperList.erase(it);
-        }
-        else {
-            ++it;
-        }
-    }
 }

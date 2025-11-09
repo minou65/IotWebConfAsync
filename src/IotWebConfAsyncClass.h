@@ -26,13 +26,12 @@
  *          use an ESPAsyncWebserver.
  * ********************************************************************/
 
+#ifndef _IOTWEBCONFASYNCCLASS_h
+#define _IOTWEBCONFASYNCCLASS_h
 
 #ifndef IOTWEBCONFASYNC_DEBUG_TO_SERIAL
 #define IOTWEBCONFASYNC_DEBUG_TO_SERIAL 0 // Set to 1 to enable debug output to serial
 #endif
-
-#ifndef _IOTWEBCONFASYNCCLASS_h
-#define _IOTWEBCONFASYNCCLASS_h
 
 #if defined(ARDUINO) && ARDUINO >= 100
 #include "arduino.h"
@@ -52,12 +51,7 @@
 #include <Update.h>
 #endif
 
-#if IOTWEBCONFASYNC_DEBUG_TO_SERIAL == 0
-bool debugIotAsyncWebRequest = true;
-#else
-bool debugIotAsyncWebRequest = false;
-#endif
-
+extern bool debugIotAsyncWebRequest;
 #define DEBUGASYNC_PRINT(x) if (debugIotAsyncWebRequest) Serial.print(x) 
 #define DEBUGASYNC_PRINTLN(x) if (debugIotAsyncWebRequest) Serial.println(x)
 #define DEBUGASYNC_PRINTF(...) if (debugIotAsyncWebRequest) Serial.printf(__VA_ARGS__)
@@ -83,7 +77,8 @@ public:
     bool hasArg(const String& name) override { return _request->hasArg(name.c_str()); }
     String arg(const String name) override { return _request->arg(name); }
 
-    bool readyToDelete() const;
+	bool isFinished() const { return _finished; }
+	bool isChunkQueueEmpty() const { return _chunkQueue.empty(); }
 
 protected:
     AsyncWebServerRequest* _request;
@@ -93,7 +88,6 @@ protected:
     bool _isChunked;
     bool _responseSent;
     bool _finished;
-    bool _readyToDelete = false;
     std::queue<String> _chunkQueue;
 
     size_t readChunk(uint8_t* buffer, size_t maxLen);
@@ -108,9 +102,6 @@ public:
 
 	void handleClient() override {};
 	void begin() override { this->_server->begin(); };
-
-    void cleanupWrappers() override;
-
 private:
 	AsyncWebServer* _server;
 	AsyncWebServerWrapper() {};
