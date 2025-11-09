@@ -4,25 +4,19 @@
 #define CONTENT_LENGTH_UNKNOWN ((size_t)-1)
 #endif
 
-#if IOTWEBCONFASYNC_DEBUG_TO_SERIAL == 0
+#if IOTWEBCONFASYNC_DEBUG_TO_SERIAL == 1
 bool debugIotAsyncWebRequest = true;
 #else
 bool debugIotAsyncWebRequest = false;
 #endif
 
-std::vector<std::unique_ptr<AsyncWebRequestWrapper>> wrapperList;
-
 AsyncWebRequestWrapper::AsyncWebRequestWrapper(AsyncWebServerRequest* request) :
     _request(request),
-    _response(nullptr),
     _contentLength(0),
-    _isChunked(false),
-    _responseSent(false),
-    _finished(false)
+    _isChunked(false)
 {
     sendHeader("Server", "ESP Async Web Server");
     sendHeader(asyncsrv::T_Cache_Control, "public,max-age=60");
-    wrapperList.push_back(std::unique_ptr<AsyncWebRequestWrapper>(this));
 }
 
 void AsyncWebRequestWrapper::send(int code, const char* content_type, const String& content) {
@@ -32,36 +26,28 @@ void AsyncWebRequestWrapper::send(int code, const char* content_type, const Stri
     DEBUGASYNC_PRINT("    Content: "); DEBUGASYNC_PRINTLN(content);
     DEBUGASYNC_PRINT("    Content length: "); DEBUGASYNC_PRINTLN(content.length());
 
-    if (_responseSent) return;
-    const char* type = content_type ? content_type : "text/html";
+    const char* type_ = content_type ? content_type : "text/html";
 
     _request->onDisconnect([this]() {
-        auto it = std::find_if(wrapperList.begin(), wrapperList.end(),
-            [this](const std::unique_ptr<AsyncWebRequestWrapper>& ptr) { return ptr.get() == this; });
-        if (it != wrapperList.end()) {
-            wrapperList.erase(it);
-        }
+        delete this;
         });
 
     if (_isChunked) {
-        if (_response == nullptr) {
-            _response = new AsyncChunkedResponse(type, [this](uint8_t* buffer, size_t maxLen, size_t) {
-                return this->readChunk(buffer, maxLen);
-                });
-            for (const auto& h : _headers) _response->addHeader(h.first, h.second);
-            _response->setCode(code);
-            _request->send(_response);
-            _responseSent = true;
-        }
+        AsyncWebServerResponse* response_ = new AsyncChunkedResponse(type_, [this](uint8_t* buffer, size_t maxLen, size_t) {
+            return this->readChunk(buffer, maxLen);
+            });
+        for (const auto& h_ : _headers) response_->addHeader(h_.first, h_.second);
+        response_->setCode(code);
+        _request->send(response_);
+
     }
     else {
-        auto* stream = _request->beginResponseStream(type);
-        stream->setCode(code);
-        stream->setContentLength(_contentLength);
-        stream->print(content);
-        for (const auto& h : _headers) stream->addHeader(h.first, h.second);
-        _request->send(stream);
-        _responseSent = true;
+        auto* stream_ = _request->beginResponseStream(type_);
+        stream_->setCode(code);
+        stream_->setContentLength(_contentLength);
+        stream_->print(content);
+        for (const auto& h_ : _headers) stream_->addHeader(h_.first, h_.second);
+        _request->send(stream_);
     }
 }
 
@@ -87,13 +73,6 @@ void AsyncWebRequestWrapper::setContentLength(const size_t contentLength) {
 
 void AsyncWebRequestWrapper::stop() {
     DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::stop");
-    _finished = true;
-    if (!_isChunked) {
-        if (_deleteReadyTimestamp == 0) {
-            _deleteReadyTimestamp = millis();
-            DEBUGASYNC_PRINTLN("    Marked for deletion, waiting for safe cleanup");
-        }
-    }
 }
 
 size_t AsyncWebRequestWrapper::readChunk(uint8_t* buffer, size_t maxLen) {
@@ -118,9 +97,8 @@ size_t AsyncWebRequestWrapper::readChunk(uint8_t* buffer, size_t maxLen) {
 
     DEBUGASYNC_PRINTLN("    Returning chunk of length: " + String(totalLen));
 
-    // Only set readyToDelete if finished AND no more data AND this was the last call (totalLen == 0)
-    if (_chunkQueue.empty() && _finished && totalLen == 0) {
-        DEBUGASYNC_PRINTLN("    Marked for deletion, waiting for safe cleanup");
+    if (_chunkQueue.empty() && totalLen == 0) {
+        DEBUGASYNC_PRINTLN("    All data has been transmitted. Transfer complete.");
     }
 
     return totalLen;

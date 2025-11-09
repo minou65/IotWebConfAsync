@@ -77,19 +77,15 @@ public:
     bool hasArg(const String& name) override { return _request->hasArg(name.c_str()); }
     String arg(const String name) override { return _request->arg(name); }
 
-	bool isFinished() const { return _finished; }
 	bool isChunkQueueEmpty() const { return _chunkQueue.empty(); }
 
 protected:
     AsyncWebServerRequest* _request;
-    AsyncWebServerResponse* _reponse;
     std::vector<std::pair<String, String>> _headers;
+    std::queue<String> _chunkQueue;
     size_t _contentLength;
     bool _isChunked;
-    bool _responseSent;
-    bool _finished;
-    std::queue<String> _chunkQueue;
-
+    
     size_t readChunk(uint8_t* buffer, size_t maxLen);
 
     friend class IotWebConf;
