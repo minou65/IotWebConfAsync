@@ -81,10 +81,12 @@ public:
 
 protected:
     AsyncWebServerRequest* _request;
+    AsyncWebServerResponse* _response;
     std::vector<std::pair<String, String>> _headers;
     std::queue<String> _chunkQueue;
     size_t _contentLength;
     bool _isChunked;
+	bool _isFinished;
     
     size_t readChunk(uint8_t* buffer, size_t maxLen);
 

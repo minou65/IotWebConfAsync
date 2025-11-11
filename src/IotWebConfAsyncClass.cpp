@@ -13,8 +13,14 @@ bool debugIotAsyncWebRequest = false;
 AsyncWebRequestWrapper::AsyncWebRequestWrapper(AsyncWebServerRequest* request) :
     _request(request),
     _contentLength(0),
-    _isChunked(false)
+    _isChunked(false),
+	_isFinished(false)
 {
+
+    _request->onDisconnect([this]() {
+        delete this;
+        });
+
     sendHeader("Server", "ESP Async Web Server");
     sendHeader(asyncsrv::T_Cache_Control, "public,max-age=60");
 }
@@ -26,16 +32,8 @@ void AsyncWebRequestWrapper::send(int code, const char* content_type, const Stri
     DEBUGASYNC_PRINT("    Content: "); DEBUGASYNC_PRINTLN(content);
     DEBUGASYNC_PRINT("    Content length: "); DEBUGASYNC_PRINTLN(content.length());
 
-    const char* type_ = content_type ? content_type : "text/html";
-
-    _request->onDisconnect([this]() {
-        delete this;
-        });
-
     if (_isChunked) {
-        AsyncWebServerResponse* response_ = new AsyncChunkedResponse(type_, [this](uint8_t* buffer, size_t maxLen, size_t) {
-            return this->readChunk(buffer, maxLen);
-            });
+
         for (const auto& h_ : _headers) response_->addHeader(h_.first, h_.second);
         response_->setCode(code);
         _request->send(response_);
@@ -68,11 +66,15 @@ void AsyncWebRequestWrapper::setContentLength(const size_t contentLength) {
     _contentLength = contentLength;
     if (contentLength == CONTENT_LENGTH_UNKNOWN) {
         _isChunked = true;
+        _response = new AsyncChunkedResponse(type_, [this](uint8_t* buffer, size_t maxLen, size_t) {
+            return this->readChunk(buffer, maxLen);
+            });
     }
 }
 
 void AsyncWebRequestWrapper::stop() {
     DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::stop");
+	_isFinished = true;
 }
 
 size_t AsyncWebRequestWrapper::readChunk(uint8_t* buffer, size_t maxLen) {
@@ -95,11 +97,22 @@ size_t AsyncWebRequestWrapper::readChunk(uint8_t* buffer, size_t maxLen) {
         }
     }
 
-    DEBUGASYNC_PRINTLN("    Returning chunk of length: " + String(totalLen));
-
+    // If the queue is empty and _isFinished is false, send a dummy byte
     if (_chunkQueue.empty() && totalLen == 0) {
-        DEBUGASYNC_PRINTLN("    All data has been transmitted. Transfer complete.");
+        if (_isFinished) {
+            DEBUGASYNC_PRINTLN("    All data has been transmitted. Transfer complete.");
+            return 0;
+        }
+        else {
+            // Send a dummy byte to keep the transfer alive
+            if (maxLen > 0) {
+                buffer[0] = ' ';
+                totalLen = 1;
+                DEBUGASYNC_PRINTLN("    Queue empty, sending dummy byte to keep connection alive.");
+            }
+        }
     }
 
+    DEBUGASYNC_PRINTLN("    Returning chunk of length: " + String(totalLen));
     return totalLen;
 }
