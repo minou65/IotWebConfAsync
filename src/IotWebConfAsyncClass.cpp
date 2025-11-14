@@ -4,6 +4,8 @@
 #define CONTENT_LENGTH_UNKNOWN ((size_t)-1)
 #endif
 
+#define IOTWEBCONFASYNC_DEBUG_TO_SERIAL 1
+
 #if IOTWEBCONFASYNC_DEBUG_TO_SERIAL == 1
 bool debugIotAsyncWebRequest = true;
 #else
@@ -18,7 +20,7 @@ AsyncWebRequestWrapper::AsyncWebRequestWrapper(AsyncWebServerRequest* request) :
 {
 
     _request->onDisconnect([this]() {
-        delete this;
+        //delete this;
         });
 
     sendHeader("Server", "ESP Async Web Server");
@@ -33,14 +35,11 @@ void AsyncWebRequestWrapper::send(int code, const char* content_type, const Stri
     DEBUGASYNC_PRINT("    Content length: "); DEBUGASYNC_PRINTLN(content.length());
 
     if (_isChunked) {
-
-        for (const auto& h_ : _headers) response_->addHeader(h_.first, h_.second);
-        response_->setCode(code);
-        _request->send(response_);
+        _contentType = content_type;
 
     }
     else {
-        auto* stream_ = _request->beginResponseStream(type_);
+        auto* stream_ = _request->beginResponseStream(content_type);
         stream_->setCode(code);
         stream_->setContentLength(_contentLength);
         stream_->print(content);
@@ -63,12 +62,18 @@ void AsyncWebRequestWrapper::sendContent(const String& content) {
 }
 
 void AsyncWebRequestWrapper::setContentLength(const size_t contentLength) {
+    DEBUGASYNC_PRINTLN("AsyncWebRequestWrapper::setContentLength");
+    DEBUGASYNC_PRINT("    Content length: "); DEBUGASYNC_PRINTLN(contentLength);
     _contentLength = contentLength;
     if (contentLength == CONTENT_LENGTH_UNKNOWN) {
+		DEBUGASYNC_PRINTLN("    Using chunked transfer encoding");
         _isChunked = true;
-        _response = new AsyncChunkedResponse(type_, [this](uint8_t* buffer, size_t maxLen, size_t) {
+        _response = new AsyncChunkedResponse(_contentType, [this](uint8_t* buffer, size_t maxLen, size_t) {
             return this->readChunk(buffer, maxLen);
             });
+        for (const auto& h_ : _headers) _response->addHeader(h_.first, h_.second);
+        _response->setCode(200);
+        _request->send(_response);
     }
 }
 

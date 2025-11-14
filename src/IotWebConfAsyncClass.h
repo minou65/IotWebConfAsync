@@ -85,6 +85,7 @@ protected:
     std::vector<std::pair<String, String>> _headers;
     std::queue<String> _chunkQueue;
     size_t _contentLength;
+	String _contentType;
     bool _isChunked;
 	bool _isFinished;
     
