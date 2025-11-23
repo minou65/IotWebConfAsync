@@ -1,0 +1,222 @@
+/**
+ * IotWebConfAsyncUpdateServer.h -- IotWebConf is an ESP8266/ESP32
+ *   non blocking WiFi/AP web configuration library for Arduino.
+ *   https://github.com/prampec/IotWebConf
+ *
+ * Copyright (C) 2020 Balazs Kelemen <prampec+arduino@gmail.com>
+ *
+ * This software may be modified and distributed under the terms
+ * of the MIT license.  See the LICENSE file for details.
+ *
+ * Notes on IotWebConfESP32HTTPUpdateServer:
+ * ESP32 doesn't implement a HTTPUpdateServer. However it seems, that the code
+ * from ESP8266 covers nearly all the same functionality.
+ * So we need to implement our own HTTPUpdateServer for ESP32, and code is
+ * reused from
+ * https://github.com/esp8266/Arduino/blob/master/libraries/ESP8266HTTPUpdateServer/src/
+ * version: 41de43a26381d7c9d29ce879dd5d7c027528371b
+ */
+
+#include <IotWebConf.h>
+#include "IotWebConfAsyncUpdateServer.h"
+
+
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <StreamString.h>
+
+#ifdef ESP8266
+#include <Updater.h>
+#define U_PART U_FS
+#elif defined(ESP32)
+#include <Update.h>
+#define U_PART U_SPIFFS
+#endif
+
+
+const char IOTWEBCONFASYNCUPDATE_HTML_REBOOT_MSG[] PROGMEM = R"(
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        [STYLE]
+    </style>
+    <meta http-equiv="refresh" content="15; url=/">
+    <title>Rebooting...</title>
+</head>
+<body>
+    [Message]
+    <br>
+    You will be redirected to the homepage shortly.
+</body>
+</html>
+)";
+
+const char IOTWEBCONFASYNCUPDATE_HTML_FORM_FIRMWARE[] PROGMEM = R"(
+<!DOCTYPE html>
+<html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no"/>
+<style>
+[STYLE]
+</style>
+</head><body>
+    <table border="0" align="center">
+        <tbody><tr><td>
+            <form method="POST" action="[PATH]" enctype="multipart/form-data">
+                <fieldset style="border: 1px solid">
+                    <legend>Firmware update</legend>
+                    <input type="file" name="update" id="updateFile" style="width: 500px"><br>
+                    <button type="submit">Upload</button>
+                </fieldset>
+            </form>
+        </td></tr>
+    </table>
+    <table border=0 align=center>
+        <tr><td align=left>Go to <a href='config'>configure page</a> to change configuration.</td></tr>
+        <tr><td align=left>Go to <a href='/'>main page</a>.</td></tr>
+    </table>
+</body></html>
+)";
+
+AsyncUpdateServer::AsyncUpdateServer(bool serial_debug) : 
+    _serial_output(serial_debug),
+    _server(nullptr),
+    _username(String()),
+    _password(String()),
+    _authenticated(false),
+    _updaterError(""),
+    _handleUpdateFinished(false)
+{
+}
+
+void AsyncUpdateServer::setup(AsyncWebServer* server) {
+    setup(server, String(), String());
+}
+
+void AsyncUpdateServer::setup(AsyncWebServer* server, const String& path) {
+    setup(server, path, String(), String());
+#ifdef ESP32
+    Update.onProgress(printProgress);
+#endif
+}
+
+#ifdef ESP32
+typedef std::function<void(size_t, size_t)> THandlerFunction_Progress;
+
+void AsyncUpdateServer::setup(AsyncWebServer* server, const String& path, THandlerFunction_Progress fn) {
+    setup(server, path, String(), String());
+    Update.onProgress(fn);
+}
+#endif
+
+void AsyncUpdateServer::setup(AsyncWebServer* server, const String& username, const String& password) {
+    setup(server, "/update", username, password);
+#ifdef ESP32
+    Update.onProgress(printProgress);
+#endif
+}
+
+void AsyncUpdateServer::setup(AsyncWebServer* server, const String& path, const String& username, const String& password) {
+    _server = server;
+    _username = username;
+    _password = password;
+
+    // handler for the /update form page
+    _server->on(path.c_str(), HTTP_GET,
+        [this, path](AsyncWebServerRequest* request) {
+            _authenticated = (_username == String() || _password == String() || request->authenticate(_username.c_str(), _password.c_str()));
+            if (!_authenticated) {
+                request->requestAuthentication();
+                return;
+            }
+            String form = getFormFirmware(path);
+            request->send(200, "text/html", form);
+        }
+    );
+
+    // handler for the /update form POST (once file upload finishes)
+    _server->on(path.c_str(), HTTP_POST,
+        [](AsyncWebServerRequest* request) {
+            Serial.println("Update POST request");
+        },
+        [this](AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final) {
+            handleUpload(request, filename, index, data, len, final, _handleUpdateFinished, _updaterError, _serial_output);
+        }
+    );
+}
+
+void AsyncUpdateServer::updateCredentials(const String& username, const String& password) {
+    _username = username;
+    _password = password;
+}
+
+bool AsyncUpdateServer::isUpdating() {
+    return Update.isRunning();
+}
+
+String AsyncUpdateServer::getUpdaterError() {
+    return _updaterError;
+}
+
+bool AsyncUpdateServer::isFinished() {
+    return _handleUpdateFinished;
+}
+
+void AsyncUpdateServer::handleUpload(AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final, bool& handleUpdateFinished, String& updaterError, bool serial_output) {
+    if (!index) {
+        Serial.println("Update started...");
+        size_t content_len_ = request->contentLength();
+        int cmd_ = (filename.indexOf("spiffs") > -1) ? U_PART : U_FLASH;
+#ifdef ESP8266
+        Update.runAsync(true);
+        if (!Update.begin(content_len, cmd_)) {
+#else
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN, cmd_)) {
+#endif
+            Update.printError(Serial);
+        }
+    }
+
+    if (Update.write(data, len) != len) {
+        Update.printError(Serial);
+    }
+
+    if (final) {
+        String html_ = FPSTR(IOTWEBCONFASYNCUPDATE_HTML_REBOOT_MSG);
+        html_.replace("[STYLE]", FPSTR(IOTWEBCONF_HTML_STYLE_INNER));
+
+        if (!Update.end(true)) {
+            StreamString str_;
+            Update.printError(str_);
+            updaterError = str_.c_str();
+				
+            html_.replace("[Message]", "Update error: " + updaterError);
+        }
+        else {
+            html_.replace("[Message]", "Update completed. Please wait while the device is rebooting...");
+            Serial.println("Update completed. Please wait while the device is rebooting...");
+            handleUpdateFinished = true;
+        }
+        AsyncWebServerResponse* response_ = request->beginResponse(200, "text/html", html_);
+        request->client()->setNoDelay(true);
+        request->send(response_);
+    }
+}
+
+#ifdef ESP32
+void AsyncUpdateServer::printProgress(size_t prg, size_t sz) {
+    static size_t lastPrinted_ = 0;
+    size_t currentPercent_ = (prg * 100) / sz;
+    if (currentPercent_ != lastPrinted_) {
+        Serial.printf("Progress: %d%%\n", (int)currentPercent_);
+        lastPrinted_ = currentPercent_;
+    }
+}
+#endif
+
+String AsyncUpdateServer::getFormFirmware(const String & path) {
+    // The action must match the update path
+    String form_ = FPSTR(IOTWEBCONFASYNCUPDATE_HTML_FORM_FIRMWARE);
+    form_.replace("[PATH]", path);
+    form_.replace("[STYLE]", FPSTR(IOTWEBCONF_HTML_STYLE_INNER));
+    return form_;
+}

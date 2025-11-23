@@ -35,7 +35,7 @@ DNSServer dnsServer;
 AsyncWebServer server(80);
 AsyncWebServerWrapper asyncWebServerWrapper(&server);
 
-IotWebConf iotWebConf(thingName, &dnsServer, &asyncWebServerWrapper, wifiInitialApPassword, CONFIG_VERSION);
+AsyncIotWebConf iotWebConf(thingName, &dnsServer, &asyncWebServerWrapper, wifiInitialApPassword, CONFIG_VERSION);
 AsyncUpdateServer AsyncUpdater;
 
 void setup() {

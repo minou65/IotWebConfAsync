@@ -26,8 +26,8 @@
  *          use an ESPAsyncWebserver.
  * ********************************************************************/
 
-#ifndef _IOTWEBCONFASYNCCLASS_h
-#define _IOTWEBCONFASYNCCLASS_h
+#ifndef _IOTWEBCONFASYNC_h
+#define _IOTWEBCONFASYNC_h
 
 #ifndef IOTWEBCONFASYNC_DEBUG_TO_SERIAL
 #define IOTWEBCONFASYNC_DEBUG_TO_SERIAL 0 // Set to 1 to enable debug output to serial
@@ -39,9 +39,9 @@
 #include "WProgram.h"
 #endif
 
-#include <ESPAsyncWebServer.h>
+#include <IotWebConf.h>
 #include <IotWebConfWebServerWrapper.h>
-#include <queue>
+#include <ESPAsyncWebServer.h>
 
 #ifdef ESP8266
 #include <ESPAsyncTCP.h>
@@ -51,10 +51,10 @@
 #include <Update.h>
 #endif
 
-extern bool debugIotAsyncWebRequest;
-#define DEBUGASYNC_PRINT(x) if (debugIotAsyncWebRequest) Serial.print(x) 
-#define DEBUGASYNC_PRINTLN(x) if (debugIotAsyncWebRequest) Serial.println(x)
-#define DEBUGASYNC_PRINTF(...) if (debugIotAsyncWebRequest) Serial.printf(__VA_ARGS__)
+#include <DNSServer.h> 
+
+class AsyncIotWebConf;
+
 
 class AsyncWebRequestWrapper : public iotwebconf::WebRequestWrapper
 {
@@ -77,13 +77,13 @@ public:
     bool hasArg(const String& name) override { return _request->hasArg(name.c_str()); }
     String arg(const String name) override { return _request->arg(name); }
 
-	bool isChunkQueueEmpty() const { return _chunkQueue.empty(); }
+    void setConfiguration(AsyncIotWebConf* configuration);
 
 protected:
     AsyncWebServerRequest* _request;
     AsyncWebServerResponse* _response;
+	AsyncIotWebConf* _configuration;
     std::vector<std::pair<String, String>> _headers;
-    std::queue<String> _chunkQueue;
     size_t _contentLength;
 	String _contentType;
     bool _isChunked;
@@ -91,8 +91,7 @@ protected:
     
     size_t readChunk(uint8_t* buffer, size_t maxLen);
 
-    friend class IotWebConf;
-    friend class AsyncWebServerRequest;
+    friend class AsyncIotWebConf;
 };
 
 class AsyncWebServerWrapper : public iotwebconf::WebServerWrapper {
@@ -104,9 +103,46 @@ public:
 private:
 	AsyncWebServer* _server;
 	AsyncWebServerWrapper() {};
+};
 
+class AsyncIotWebConf : public iotwebconf::IotWebConf {
+public:
+    enum ChunkStep {
+        CHUNK_HEAD,
+        CHUNK_SCRIPT,
+        CHUNK_STYLE,
+        CHUNK_HEADEXT,
+        CHUNK_HEADEND,
+        CHUNK_FORMSTART,
+        CHUNK_SYSTEMPARAMS,
+        CHUNK_CUSTOMPARAMS,
+        CHUNK_FORMEND,
+        CHUNK_UPDATE,
+        CHUNK_CONFIGVER,
+        CHUNK_END,
+        CHUNK_DONE
+    };
+    AsyncIotWebConf(
+        const char* defaultThingName, DNSServer* dnsServer, AsyncWebServerWrapper* webServerWrapper,
+        const char* initialApPassword, const char* configVersion = "init");
+    void handleConfig(AsyncWebRequestWrapper* webRequestWrapper);
+    size_t getNextChunk(uint8_t* buffer, size_t maxLen);
+
+    void resetChunkState();
+
+private:
+    ChunkStep _currentChunkStep = CHUNK_HEAD;
+    String _chunkBuffer;
+    size_t _chunkBufferPos = 0;
+
+    size_t _maxChunkSize = 0;
+    size_t _totalBytesSent = 0;
+
+	AsyncWebRequestWrapper* _webRequestWrapper = nullptr;
+
+	friend class AsyncWebRequestWrapper;
 	friend class IotWebConf;
-	friend class AsyncWebServer;
+
 };
 
 #endif
