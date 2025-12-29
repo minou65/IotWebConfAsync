@@ -259,6 +259,7 @@ size_t AsyncIotWebConf::getNextChunk(uint8_t* buffer, size_t maxLen) {
 		DEBUGASYNC_PRINTF("  Max chunk size sent: %u bytes\n", (unsigned int)_maxChunkSize);
         DEBUGASYNC_PRINTF("  Total bytes sent: %u bytes\n", (unsigned int)_totalBytesSent);
 		resetChunkState();
+		return 0;
 	}
 
     return written_;
