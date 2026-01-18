@@ -4,7 +4,7 @@
 #define CONTENT_LENGTH_UNKNOWN ((size_t)-1)
 #endif
 
-#define IOTWEBCONFASYNC_DEBUG_TO_SERIAL 1
+#define IOTWEBCONFASYNC_DEBUG_TO_SERIAL 0
 
 #if IOTWEBCONFASYNC_DEBUG_TO_SERIAL == 1
 bool debugIotAsyncWebRequest = true;
