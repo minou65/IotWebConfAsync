@@ -149,28 +149,22 @@ size_t AsyncIotWebConf::getNextChunk(uint8_t* buffer, size_t maxLen) {
     DEBUGASYNC_PRINT("  Current chunk step: "); DEBUGASYNC_PRINTLN(_currentChunkStep);
     bool dataArrived_ = false;
     size_t written_ = 0;
-    bool bufferFull_ = false;
-    bool finish_ = false;
 
-    HtmlChunkCallback writer_ = [&](const char* data, size_t len) -> bool {
-        yield();
-        // Check if the new string still fits in the buffer
-        if (bufferFull_ || (_chunkBuffer.length() + len > maxLen)) return false;
-        size_t toCopy_ = std::min(maxLen - _chunkBuffer.length(), len);
-        _chunkBuffer += String(data).substring(0, toCopy_);
-        if (_chunkBuffer.length() >= maxLen) bufferFull_ = true;
-        return !bufferFull_;
-    };
-
-    while (_currentChunkStep != CHUNK_DONE) {
+    while (_currentChunkStep != CHUNK_DONE && written_ < maxLen) {
         yield();
 
-        // If _chunkBuffer is empty or all data has been read, generate a new chunk
-        if (_chunkBuffer.length() == 0 || _chunkBufferPos >= _chunkBuffer.length()) {
+        // Generate new chunk data if buffer is empty or exhausted
+        if (_chunkBufferPos >= _chunkBuffer.length()) {
+            // Only generate new data if we've sent all previous data
             _chunkBuffer = "";
             _chunkBufferPos = 0;
-            bufferFull_ = false;
-            finish_ = true;
+            bool finish_ = true;
+
+            HtmlChunkCallback writer_ = [&](const char* data, size_t len) -> bool {
+                yield();
+                _chunkBuffer += String(data).substring(0, len);
+                return true;
+            };
 
             switch (_currentChunkStep) {
             case CHUNK_HEAD:
@@ -194,9 +188,11 @@ size_t AsyncIotWebConf::getNextChunk(uint8_t* buffer, size_t maxLen) {
                 break;
             case CHUNK_SYSTEMPARAMS:
                 finish_ = this->getSystemParameterGroup()->renderHtml(dataArrived_, _webRequestWrapper, writer_);
+                DEBUGASYNC_PRINT("  CHUNK_SYSTEMPARAMS finish: "); DEBUGASYNC_PRINTLN(finish_);
                 break;
             case CHUNK_CUSTOMPARAMS:
                 finish_ = this->getCustomParameterGroup()->renderHtml(dataArrived_, _webRequestWrapper, writer_);
+                DEBUGASYNC_PRINT("  CHUNK_CUSTOMPARAMS finish: "); DEBUGASYNC_PRINTLN(finish_);
                 break;
             case CHUNK_FORMEND:
                 _chunkBuffer = this->getHtmlFormatProvider()->getFormEnd();
@@ -214,43 +210,49 @@ size_t AsyncIotWebConf::getNextChunk(uint8_t* buffer, size_t maxLen) {
                 _chunkBuffer = "";
                 break;
             }
+            
             _chunkBufferPos = 0;
-            // Only move to the next step if finish_ == true
-            if (_chunkBuffer.length() == 0) {
-                if (finish_) {
-                    _currentChunkStep = static_cast<ChunkStep>(_currentChunkStep + 1);
-                    continue; // Skip empty chunks
-                }
-                else {
-                    break; // Wait for finish_==true
-                }
+            _maxChunkSize = max(_maxChunkSize, _chunkBuffer.length());
+
+            DEBUGASYNC_PRINTF("  Generated chunk data, length: %u bytes, finish: %d\n", 
+                (unsigned int)_chunkBuffer.length(), finish_);
+
+            // If buffer is empty and step is not finished, wait for next call
+            if (_chunkBuffer.length() == 0 && !finish_) {
+                DEBUGASYNC_PRINTLN("  Step incomplete but no data generated, will retry next call");
+                break;
+            }
+            
+            // If buffer is empty and step is finished, move to next step
+            if (_chunkBuffer.length() == 0 && finish_) {
+                DEBUGASYNC_PRINTLN("  Empty chunk, moving to next step");
+                _currentChunkStep = static_cast<ChunkStep>(_currentChunkStep + 1);
+                continue;
             }
         }
 
-        _maxChunkSize = max(_maxChunkSize, _chunkBuffer.length());
-        _totalBytesSent += _chunkBuffer.length();
-
-		DEBUGASYNC_PRINTF("  Requestet max chunk length: %u bytes\n", (unsigned int)maxLen);
+		DEBUGASYNC_PRINTF("  Requested max chunk length: %u bytes\n", (unsigned int)maxLen);
 		DEBUGASYNC_PRINTF("  Chunk buffer length: %u bytes\n", (unsigned int)_chunkBuffer.length());
+		DEBUGASYNC_PRINTF("  Chunk buffer pos: %u bytes\n", (unsigned int)_chunkBufferPos);
 
-        // Copy from _chunkBuffer to the target buffer
+        // Copy as much as possible from _chunkBuffer to output buffer
         size_t toCopy_ = std::min(maxLen - written_, _chunkBuffer.length() - _chunkBufferPos);
         memcpy(buffer + written_, _chunkBuffer.c_str() + _chunkBufferPos, toCopy_);
         _chunkBufferPos += toCopy_;
         written_ += toCopy_;
+        _totalBytesSent += toCopy_;
 
-        // If there is still data left in the chunk buffer, return the current chunk
-        if (_chunkBufferPos < _chunkBuffer.length() && written_ < maxLen) {
-            return written_;
-        }
-        else {
-            _chunkBuffer = "";
-            _chunkBufferPos = 0;
-            // Only move to the next step if finish_ == true
-            if (finish_) {
-                _currentChunkStep = static_cast<ChunkStep>(_currentChunkStep + 1);
-            }
-            if (written_ > 0) return written_;
+		DEBUGASYNC_PRINTF("  Copied %u bytes, total written: %u bytes\n", (unsigned int)toCopy_, (unsigned int)written_);
+
+        // Check if we've sent all data from current chunk buffer
+        if (_chunkBufferPos >= _chunkBuffer.length()) {
+            DEBUGASYNC_PRINTLN("  Current chunk buffer completely sent");
+            // Move to next step only if this step is complete
+            _currentChunkStep = static_cast<ChunkStep>(_currentChunkStep + 1);
+        } else {
+            // Still more data in buffer, will continue next call
+            DEBUGASYNC_PRINTLN("  More data in buffer, will continue next call");
+            break;
         }
     }
 
