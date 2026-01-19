@@ -4,7 +4,7 @@
 #define CONTENT_LENGTH_UNKNOWN ((size_t)-1)
 #endif
 
-#define IOTWEBCONFASYNC_DEBUG_TO_SERIAL 0
+#define IOTWEBCONFASYNC_DEBUG_TO_SERIAL 1
 
 #if IOTWEBCONFASYNC_DEBUG_TO_SERIAL == 1
 bool debugIotAsyncWebRequest = true;
@@ -149,16 +149,15 @@ size_t AsyncIotWebConf::getNextChunk(uint8_t* buffer, size_t maxLen) {
     DEBUGASYNC_PRINT("  Current chunk step: "); DEBUGASYNC_PRINTLN(_currentChunkStep);
     bool dataArrived_ = false;
     size_t written_ = 0;
+    bool currentStepFinished_ = true;  // Track if current step is complete
 
     while (_currentChunkStep != CHUNK_DONE && written_ < maxLen) {
         yield();
 
         // Generate new chunk data if buffer is empty or exhausted
         if (_chunkBufferPos >= _chunkBuffer.length()) {
-            // Only generate new data if we've sent all previous data
             _chunkBuffer = "";
             _chunkBufferPos = 0;
-            bool finish_ = true;
 
             HtmlChunkCallback writer_ = [&](const char* data, size_t len) -> bool {
                 yield();
@@ -170,61 +169,72 @@ size_t AsyncIotWebConf::getNextChunk(uint8_t* buffer, size_t maxLen) {
             case CHUNK_HEAD:
                 _chunkBuffer = this->getHtmlFormatProvider()->getHead();
                 _chunkBuffer.replace("{v}", String("Config ") + this->getThingName());
+                currentStepFinished_ = true;
                 break;
             case CHUNK_SCRIPT:
                 _chunkBuffer = this->getHtmlFormatProvider()->getScript();
+                currentStepFinished_ = true;
                 break;
             case CHUNK_STYLE:
                 _chunkBuffer = this->getHtmlFormatProvider()->getStyle();
+                currentStepFinished_ = true;
                 break;
             case CHUNK_HEADEXT:
                 _chunkBuffer = this->getHtmlFormatProvider()->getHeadExtension();
+                currentStepFinished_ = true;
                 break;
             case CHUNK_HEADEND:
                 _chunkBuffer = this->getHtmlFormatProvider()->getHeadEnd();
+                currentStepFinished_ = true;
                 break;
             case CHUNK_FORMSTART:
                 _chunkBuffer = this->getHtmlFormatProvider()->getFormStart();
+                currentStepFinished_ = true;
                 break;
             case CHUNK_SYSTEMPARAMS:
-                finish_ = this->getSystemParameterGroup()->renderHtml(dataArrived_, _webRequestWrapper, writer_);
-                DEBUGASYNC_PRINT("  CHUNK_SYSTEMPARAMS finish: "); DEBUGASYNC_PRINTLN(finish_);
+                currentStepFinished_ = this->getSystemParameterGroup()->renderHtml(dataArrived_, _webRequestWrapper, writer_);
+                DEBUGASYNC_PRINT("  CHUNK_SYSTEMPARAMS finish: "); DEBUGASYNC_PRINTLN(currentStepFinished_);
                 break;
             case CHUNK_CUSTOMPARAMS:
-                finish_ = this->getCustomParameterGroup()->renderHtml(dataArrived_, _webRequestWrapper, writer_);
-                DEBUGASYNC_PRINT("  CHUNK_CUSTOMPARAMS finish: "); DEBUGASYNC_PRINTLN(finish_);
+                currentStepFinished_ = this->getCustomParameterGroup()->renderHtml(dataArrived_, _webRequestWrapper, writer_);
+                DEBUGASYNC_PRINT("  CHUNK_CUSTOMPARAMS finish: "); DEBUGASYNC_PRINTLN(currentStepFinished_);
                 break;
             case CHUNK_FORMEND:
                 _chunkBuffer = this->getHtmlFormatProvider()->getFormEnd();
+                currentStepFinished_ = true;
                 break;
             case CHUNK_UPDATE:
                 _chunkBuffer = getUpdateLinkHtml();
+                currentStepFinished_ = true;
                 break;
             case CHUNK_CONFIGVER:
                 _chunkBuffer = getConfigVersionHtml();
+                currentStepFinished_ = true;
                 break;
             case CHUNK_END:
                 _chunkBuffer = this->getHtmlFormatProvider()->getEnd();
+                currentStepFinished_ = true;
                 break;
             default:
                 _chunkBuffer = "";
+                currentStepFinished_ = true;
                 break;
             }
             
             _chunkBufferPos = 0;
             _maxChunkSize = max(_maxChunkSize, _chunkBuffer.length());
 
-            DEBUGASYNC_PRINTF("  Generated chunk data, length: %u bytes, finish: %d\n", 
-                (unsigned int)_chunkBuffer.length(), finish_);
+            DEBUGASYNC_PRINTF("  Generated chunk data, length: %u bytes, stepFinished: %d\n", 
+                (unsigned int)_chunkBuffer.length(), currentStepFinished_);
 
             // If buffer is empty and step is not finished, wait for next call
-            if (_chunkBuffer.length() == 0 && !finish_) {
+            if (_chunkBuffer.length() == 0 && !currentStepFinished_) {
                 DEBUGASYNC_PRINTLN("  Step incomplete but no data generated, will retry next call");
                 break;
             }
             
             // If buffer is empty and step is finished, move to next step
-            if (_chunkBuffer.length() == 0 && finish_) {
+            if (_chunkBuffer.length() == 0 && currentStepFinished_) {
                 DEBUGASYNC_PRINTLN("  Empty chunk, moving to next step");
                 _currentChunkStep = static_cast<ChunkStep>(_currentChunkStep + 1);
                 continue;
@@ -247,8 +257,16 @@ size_t AsyncIotWebConf::getNextChunk(uint8_t* buffer, size_t maxLen) {
         // Check if we've sent all data from current chunk buffer
         if (_chunkBufferPos >= _chunkBuffer.length()) {
             DEBUGASYNC_PRINTLN("  Current chunk buffer completely sent");
-            // Move to next step only if this step is complete
-            _currentChunkStep = static_cast<ChunkStep>(_currentChunkStep + 1);
+            // Move to next step ONLY if this step is complete
+            if (currentStepFinished_) {
+                DEBUGASYNC_PRINTLN("  Step finished, moving to next step");
+                _currentChunkStep = static_cast<ChunkStep>(_currentChunkStep + 1);
+            } else {
+                DEBUGASYNC_PRINTLN("  Step not finished yet, staying on same step");
+                // Buffer is empty but step not finished - will call renderHtml again next time
+            }
+            // Exit loop to return current data
+            break;
         } else {
             // Still more data in buffer, will continue next call
             DEBUGASYNC_PRINTLN("  More data in buffer, will continue next call");
