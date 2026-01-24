@@ -29,10 +29,6 @@
 #ifndef _IOTWEBCONFASYNC_h
 #define _IOTWEBCONFASYNC_h
 
-#ifndef IOTWEBCONFASYNC_DEBUG_TO_SERIAL
-#define IOTWEBCONFASYNC_DEBUG_TO_SERIAL 0 // Set to 1 to enable debug output to serial
-#endif
-
 #if defined(ARDUINO) && ARDUINO >= 100
 #include "arduino.h"
 #else
@@ -134,6 +130,7 @@ private:
     ChunkStep _currentChunkStep = CHUNK_HEAD;
     String _chunkBuffer;
     size_t _chunkBufferPos = 0;
+    bool _lastStepFinished = true;
 
     size_t _maxChunkSize = 0;
     size_t _totalBytesSent = 0;
