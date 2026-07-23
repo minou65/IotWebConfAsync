@@ -5,6 +5,8 @@ VisualStudioVersion = 17.9.34622.214
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "IotWebConfAsync", "IotWebConfAsync.vcxitems", "{29E3857E-1FDB-46EF-9472-E55B3970DE9E}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "IotWebConf", "..\IotWebConf\IotWebConf.vcxitems", "{5BBBD71F-D3E1-4749-BED0-7F57A1CDC6EB}"
+EndProject
 Global
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -18,13 +18,13 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
-*/
+ */
 
-/************************************************************************//**
- * \file   IotWebConfAsyncClass.h
- *  \brief  This File contains all overrides for the iotwebconf::WebRequestWrapper class. This overrides will be needed to
- *          use an ESPAsyncWebserver.
- * ********************************************************************/
+ /************************************************************************//**
+  * \file   IotWebConfAsyncClass.h
+  *  \brief  This File contains all overrides for the iotwebconf::WebRequestWrapper class. This overrides will be needed to
+  *          use an ESPAsyncWebserver.
+  * ********************************************************************/
 
 #ifndef _IOTWEBCONFASYNC_h
 #define _IOTWEBCONFASYNC_h
@@ -52,13 +52,12 @@
 class AsyncIotWebConf;
 
 
-class AsyncWebRequestWrapper : public iotwebconf::WebRequestWrapper
-{
+class AsyncWebRequestWrapper : public iotwebconf::WebRequestWrapper {
 public:
     explicit AsyncWebRequestWrapper(AsyncWebServerRequest* request);
-    ~AsyncWebRequestWrapper(){}
+    ~AsyncWebRequestWrapper() {}
 
-	void send(int code, const char* content_type = nullptr, const String& content = String("")) override;
+    void send(int code, const char* content_type = nullptr, const String& content = String("")) override;
     void sendHeader(const String& name, const String& value, bool first = false) override;
     void sendContent(const String& content) override;
     void setContentLength(const size_t contentLength) override;
@@ -78,13 +77,13 @@ public:
 protected:
     AsyncWebServerRequest* _request;
     AsyncWebServerResponse* _response;
-	AsyncIotWebConf* _configuration;
+    AsyncIotWebConf* _configuration;
     std::vector<std::pair<String, String>> _headers;
     size_t _contentLength;
-	String _contentType;
+    String _contentType;
     bool _isChunked;
-	bool _isFinished;
-    
+    bool _isFinished;
+
     size_t readChunk(uint8_t* buffer, size_t maxLen);
 
     friend class AsyncIotWebConf;
@@ -92,13 +91,13 @@ protected:
 
 class AsyncWebServerWrapper : public iotwebconf::WebServerWrapper {
 public:
-	AsyncWebServerWrapper(AsyncWebServer* server) { this->_server = server; };
+    AsyncWebServerWrapper(AsyncWebServer* server) { this->_server = server; };
 
-	void handleClient() override {};
-	void begin() override { this->_server->begin(); };
+    void handleClient() override {};
+    void begin() override { this->_server->begin(); };
 private:
-	AsyncWebServer* _server;
-	AsyncWebServerWrapper() {};
+    AsyncWebServer* _server;
+    AsyncWebServerWrapper() {};
 };
 
 class AsyncIotWebConf : public iotwebconf::IotWebConf {
@@ -122,11 +121,11 @@ public:
         const char* defaultThingName, DNSServer* dnsServer, AsyncWebServerWrapper* webServerWrapper,
         const char* initialApPassword, const char* configVersion = "init");
     void handleConfig(AsyncWebRequestWrapper* webRequestWrapper);
-    size_t getNextChunk(uint8_t* buffer, size_t maxLen);
+    virtual size_t getNextChunk(uint8_t* buffer, size_t maxLen);
 
-    void resetChunkState();
+    virtual void resetChunkState();
 
-private:
+protected:
     ChunkStep _currentChunkStep = CHUNK_HEAD;
     String _chunkBuffer;
     size_t _chunkBufferPos = 0;
@@ -135,10 +134,11 @@ private:
     size_t _maxChunkSize = 0;
     size_t _totalBytesSent = 0;
 
-	AsyncWebRequestWrapper* _webRequestWrapper = nullptr;
+    AsyncWebRequestWrapper* _webRequestWrapper = nullptr;
 
-	friend class AsyncWebRequestWrapper;
-	friend class IotWebConf;
+    friend class AsyncWebRequestWrapper;
+    friend class IotWebConf;
+    friend class AsyncIotWebConfTab;
 
 };
 
