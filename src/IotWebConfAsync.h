@@ -36,6 +36,7 @@
 #endif
 
 #include <IotWebConf.h>
+#include <IotWebConfOptionalGroup.h>
 #include <IotWebConfWebServerWrapper.h>
 #include <ESPAsyncWebServer.h>
 
@@ -50,6 +51,30 @@
 #include <DNSServer.h> 
 
 class AsyncIotWebConf;
+
+/**
+ * Custom HTML format provider that combines tab support with optional groups
+ */
+class TabOptionalGroupHtmlFormatProvider : public iotwebconf::OptionalGroupHtmlFormatProvider {
+protected:
+    virtual String getStyleInner() override {
+        String style_ = iotwebconf::OptionalGroupHtmlFormatProvider::getStyleInner();
+
+        // Add Tab styling
+        style_ += F("body > div{min-width:260px;max-width:600px;width:100%;box-sizing:border-box;}\n");
+        style_ += F(".tab{overflow:hidden;border-bottom:2px solid #16A1E7;background-color:#f1f1f1;margin-bottom:10px;display:flex;}\n");
+        style_ += F(".tab button{background-color:#f1f1f1 !important;flex:1 1 0;min-width:0;border:1px solid #ccc !important;outline:none;cursor:pointer;");
+        style_ += F("padding:14px 16px;transition:0.3s;font-size:16px;border-top-left-radius:5px;border-top-right-radius:5px;");
+        style_ += F("margin-right:2px;border-bottom:none !important;color:#333 !important;line-height:normal !important;width:auto !important;box-sizing:border-box;}\n");
+        style_ += F(".tab button:hover{background-color:#ddd !important;}\n");
+        style_ += F(".tab button.active{background-color:#16A1E7 !important;color:white !important;border:1px solid #16A1E7 !important;");
+        style_ += F("border-bottom:2px solid #fff !important;position:relative;z-index:1;}\n");
+        style_ += F(".tabcontent{display:none;padding:12px;border:1px solid #ccc;border-top:none;background-color:#fff;}\n");
+        style_ += F("fieldset{width:100%;box-sizing:border-box;}\n");
+
+        return style_;
+    }
+};
 
 
 class AsyncWebRequestWrapper : public iotwebconf::WebRequestWrapper {
