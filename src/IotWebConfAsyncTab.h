@@ -78,6 +78,37 @@ public:
         return style;
     }
 
+    String getScriptInner() override {
+        String s = HtmlFormatProvider::getScriptInner();
+
+        // Auto-switch to tab with validation error
+        s += F("\n// Auto-switch to tab with validation error\n");
+        s += F("document.addEventListener('DOMContentLoaded',function(){\n");
+        s += F("  var form=document.querySelector('form');\n");
+        s += F("  if(form){\n");
+        s += F("    var inputs=form.querySelectorAll('input,select,textarea');\n");
+        s += F("    inputs.forEach(function(input){\n");
+        s += F("      input.addEventListener('invalid',function(e){\n");
+        s += F("        var tabContent=this.closest('.tabcontent');\n");
+        s += F("        if(tabContent && tabContent.style.display!=='block'){\n");
+        s += F("          e.preventDefault();\n");
+        s += F("          var tabId=tabContent.id;\n");
+        s += F("          var tabButton=document.querySelector('.tablinks[onclick*=\"'+tabId+'\"]');\n");
+        s += F("          if(tabButton){\n");
+        s += F("            tabButton.click();\n");
+        s += F("            setTimeout(function(){\n");
+        s += F("              input.reportValidity();\n");
+        s += F("            },100);\n");
+        s += F("          }\n");
+        s += F("        }\n");
+        s += F("      });\n");
+        s += F("    });\n");
+        s += F("  }\n");
+        s += F("});\n");
+
+        return s;
+    }
+
 private:
     std::vector<AsyncTabInfo>* _tabs;
     int _minWidth;
