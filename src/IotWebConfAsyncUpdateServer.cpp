@@ -30,6 +30,7 @@
 #define U_PART U_FS
 #elif defined(ESP32)
 #include <Update.h>
+#include <esp_task_wdt.h>
 #define U_PART U_SPIFFS
 #endif
 
@@ -162,8 +163,24 @@ bool AsyncUpdateServer::isFinished() {
 }
 
 void AsyncUpdateServer::handleUpload(AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final, bool& handleUpdateFinished, String& updaterError, bool serial_output) {
+    static bool wdt_was_active_ = false;
+    
     if (!index) {
         Serial.println("Update started...");
+        
+#ifdef ESP32
+        // WICHTIG: Prüfen ob Watchdog aktiv ist und dann deaktivieren
+        esp_err_t wdt_status_ = esp_task_wdt_status(NULL);
+        if (wdt_status_ == ESP_OK) {
+            wdt_was_active_ = true;
+            esp_task_wdt_deinit();
+            Serial.println("Watchdog Timer disabled for firmware update");
+        } else {
+            wdt_was_active_ = false;
+            Serial.println("Watchdog Timer was not active");
+        }
+#endif
+        
         size_t content_len_ = request->contentLength();
         int cmd_ = (filename.indexOf("spiffs") > -1) ? U_PART : U_FLASH;
 #ifdef ESP8266
@@ -173,6 +190,20 @@ void AsyncUpdateServer::handleUpload(AsyncWebServerRequest* request, const Strin
         if (!Update.begin(UPDATE_SIZE_UNKNOWN, cmd_)) {
 #endif
             Update.printError(Serial);
+            
+#ifdef ESP32
+            // Bei Fehler Watchdog nur wieder aktivieren, wenn er vorher aktiv war
+            if (wdt_was_active_) {
+                Serial.println("Update begin failed, re-enabling watchdog");
+                esp_task_wdt_config_t wdt_config_ = {
+                    .timeout_ms = 30000,
+                    .idle_core_mask = 0,
+                    .trigger_panic = true
+                };
+                esp_task_wdt_init(&wdt_config_);
+                esp_task_wdt_add(NULL);
+            }
+#endif
         }
     }
 
@@ -190,15 +221,34 @@ void AsyncUpdateServer::handleUpload(AsyncWebServerRequest* request, const Strin
             updaterError = str_.c_str();
 				
             html_.replace("[Message]", "Update error: " + updaterError);
+            
+#ifdef ESP32
+            // Bei Fehler Watchdog nur wieder aktivieren, wenn er vorher aktiv war
+            if (wdt_was_active_) {
+                Serial.println("Update failed, re-enabling watchdog");
+                esp_task_wdt_config_t wdt_config_ = {
+                    .timeout_ms = 30000,
+                    .idle_core_mask = 0,
+                    .trigger_panic = true
+                };
+                esp_task_wdt_init(&wdt_config_);
+                esp_task_wdt_add(NULL);
+            }
+#endif
         }
         else {
             html_.replace("[Message]", "Update completed. Please wait while the device is rebooting...");
             Serial.println("Update completed. Please wait while the device is rebooting...");
             handleUpdateFinished = true;
+            // Watchdog bleibt deaktiviert, da gleich Reboot folgt
         }
+        
         AsyncWebServerResponse* response_ = request->beginResponse(200, "text/html", html_);
         request->client()->setNoDelay(true);
         request->send(response_);
+        
+        // Reset des Flags für nächstes Update
+        wdt_was_active_ = false;
     }
 }
 
