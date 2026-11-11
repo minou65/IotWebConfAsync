@@ -85,7 +85,16 @@ AsyncUpdateServer::AsyncUpdateServer(bool serial_debug) :
     _password(String()),
     _authenticated(false),
     _updaterError(""),
-    _handleUpdateFinished(false)
+    _handleUpdateFinished(false),
+    _onBegin(nullptr),
+    _onEnd(nullptr),
+    _onError(nullptr),
+    _onProgress(nullptr),
+    _onLog(nullptr)
+#ifdef ESP32
+    , _progressHandler(nullptr)
+#endif
+    , _lastProgressPercent(-1)
 {
 }
 
@@ -96,7 +105,7 @@ void AsyncUpdateServer::setup(AsyncWebServer* server) {
 void AsyncUpdateServer::setup(AsyncWebServer* server, const String& path) {
     setup(server, path, String(), String());
 #ifdef ESP32
-    Update.onProgress(printProgress);
+    configureProgressHandler();
 #endif
 }
 
@@ -105,14 +114,15 @@ typedef std::function<void(size_t, size_t)> THandlerFunction_Progress;
 
 void AsyncUpdateServer::setup(AsyncWebServer* server, const String& path, THandlerFunction_Progress fn) {
     setup(server, path, String(), String());
-    Update.onProgress(fn);
+    _progressHandler = fn;
+    configureProgressHandler();
 }
 #endif
 
 void AsyncUpdateServer::setup(AsyncWebServer* server, const String& username, const String& password) {
     setup(server, "/update", username, password);
 #ifdef ESP32
-    Update.onProgress(printProgress);
+    configureProgressHandler();
 #endif
 }
 
@@ -136,13 +146,39 @@ void AsyncUpdateServer::setup(AsyncWebServer* server, const String& path, const 
 
     // handler for the /update form POST (once file upload finishes)
     _server->on(path.c_str(), HTTP_POST,
-        [](AsyncWebServerRequest* request) {
-            Serial.println("Update POST request");
+        [this](AsyncWebServerRequest* request) {
+            logMessage("Update POST request");
         },
         [this](AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final) {
-            handleUpload(request, filename, index, data, len, final, _handleUpdateFinished, _updaterError, _serial_output);
+            handleUpload(request, filename, index, data, len, final);
         }
     );
+#ifdef ESP32
+    configureProgressHandler();
+#endif
+}
+
+void AsyncUpdateServer::onBegin(THandlerFunction_UpdateEvent fn) {
+    _onBegin = fn;
+}
+
+void AsyncUpdateServer::onEnd(THandlerFunction_UpdateEvent fn) {
+    _onEnd = fn;
+}
+
+void AsyncUpdateServer::OnError(THandlerFunction_UpdateEvent fn) {
+    _onError = fn;
+}
+
+void AsyncUpdateServer::onProgress(THandlerFunction_UpdateEvent fn) {
+    _onProgress = fn;
+#ifdef ESP32
+    configureProgressHandler();
+#endif
+}
+
+void AsyncUpdateServer::onLog(THandlerFunction_UpdateEvent fn) {
+    _onLog = fn;
 }
 
 void AsyncUpdateServer::updateCredentials(const String& username, const String& password) {
@@ -162,22 +198,25 @@ bool AsyncUpdateServer::isFinished() {
     return _handleUpdateFinished;
 }
 
-void AsyncUpdateServer::handleUpload(AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final, bool& handleUpdateFinished, String& updaterError, bool serial_output) {
+void AsyncUpdateServer::handleUpload(AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final) {
     static bool wdt_was_active_ = false;
     
     if (!index) {
-        Serial.println("Update started...");
+        _updaterError = "";
+        _handleUpdateFinished = false;
+        _lastProgressPercent = -1;
+        dispatchCallback(_onBegin, String("Update started: ") + filename);
         
 #ifdef ESP32
-        // WICHTIG: Prüfen ob Watchdog aktiv ist und dann deaktivieren
+        // Check whether the watchdog is active and disable it.
         esp_err_t wdt_status_ = esp_task_wdt_status(NULL);
         if (wdt_status_ == ESP_OK) {
             wdt_was_active_ = true;
             esp_task_wdt_deinit();
-            Serial.println("Watchdog Timer disabled for firmware update");
+            logMessage("Watchdog Timer disabled for firmware update");
         } else {
             wdt_was_active_ = false;
-            Serial.println("Watchdog Timer was not active");
+            logMessage("Watchdog Timer was not active");
         }
 #endif
         
@@ -189,12 +228,15 @@ void AsyncUpdateServer::handleUpload(AsyncWebServerRequest* request, const Strin
 #else
         if (!Update.begin(UPDATE_SIZE_UNKNOWN, cmd_)) {
 #endif
-            Update.printError(Serial);
+            StreamString error_;
+            Update.printError(error_);
+            _updaterError = error_.c_str();
+            dispatchCallback(_onError, String("Update begin failed: ") + _updaterError);
             
 #ifdef ESP32
-            // Bei Fehler Watchdog nur wieder aktivieren, wenn er vorher aktiv war
+            // Re-enable the watchdog only if it was active before the update.
             if (wdt_was_active_) {
-                Serial.println("Update begin failed, re-enabling watchdog");
+                logMessage("Update begin failed, re-enabling watchdog");
                 esp_task_wdt_config_t wdt_config_ = {
                     .timeout_ms = 30000,
                     .idle_core_mask = 0,
@@ -208,8 +250,16 @@ void AsyncUpdateServer::handleUpload(AsyncWebServerRequest* request, const Strin
     }
 
     if (Update.write(data, len) != len) {
-        Update.printError(Serial);
+        StreamString error_;
+        Update.printError(error_);
+        _updaterError = error_.c_str();
+        dispatchCallback(_onError, String("Update write failed: ") + _updaterError);
     }
+#ifndef ESP32
+    else {
+        notifyProgress(Update.progress(), Update.size());
+    }
+#endif
 
     if (final) {
         String html_ = FPSTR(IOTWEBCONFASYNCUPDATE_HTML_REBOOT_MSG);
@@ -218,14 +268,15 @@ void AsyncUpdateServer::handleUpload(AsyncWebServerRequest* request, const Strin
         if (!Update.end(true)) {
             StreamString str_;
             Update.printError(str_);
-            updaterError = str_.c_str();
+            _updaterError = str_.c_str();
+            dispatchCallback(_onError, String("Update failed: ") + _updaterError);
 				
-            html_.replace("[Message]", "Update error: " + updaterError);
+            html_.replace("[Message]", "Update error: " + _updaterError);
             
 #ifdef ESP32
-            // Bei Fehler Watchdog nur wieder aktivieren, wenn er vorher aktiv war
+            // Re-enable the watchdog only if it was active before the update.
             if (wdt_was_active_) {
-                Serial.println("Update failed, re-enabling watchdog");
+                logMessage("Update failed, re-enabling watchdog");
                 esp_task_wdt_config_t wdt_config_ = {
                     .timeout_ms = 30000,
                     .idle_core_mask = 0,
@@ -238,30 +289,70 @@ void AsyncUpdateServer::handleUpload(AsyncWebServerRequest* request, const Strin
         }
         else {
             html_.replace("[Message]", "Update completed. Please wait while the device is rebooting...");
-            Serial.println("Update completed. Please wait while the device is rebooting...");
-            handleUpdateFinished = true;
-            // Watchdog bleibt deaktiviert, da gleich Reboot folgt
+            _handleUpdateFinished = true;
+            notifyProgress(1, 1);
+            // Keep the watchdog disabled because the device is about to reboot.
         }
+
+        dispatchCallback(_onEnd, _updaterError.length() == 0
+            ? String("Update completed. Please wait while the device is rebooting...")
+            : String("Update ended with error: ") + _updaterError);
         
         AsyncWebServerResponse* response_ = request->beginResponse(200, "text/html", html_);
         request->client()->setNoDelay(true);
         request->send(response_);
         
-        // Reset des Flags für nächstes Update
+        // Reset the flag for the next update.
         wdt_was_active_ = false;
     }
 }
 
 #ifdef ESP32
-void AsyncUpdateServer::printProgress(size_t prg, size_t sz) {
-    static size_t lastPrinted_ = 0;
-    size_t currentPercent_ = (prg * 100) / sz;
-    if (currentPercent_ != lastPrinted_) {
-        Serial.printf("Progress: %d%%\n", (int)currentPercent_);
-        lastPrinted_ = currentPercent_;
-    }
+void AsyncUpdateServer::configureProgressHandler() {
+    Update.onProgress([this](size_t prg, size_t sz) {
+        if (_progressHandler) {
+            _progressHandler(prg, sz);
+        }
+        notifyProgress(prg, sz);
+    });
 }
 #endif
+
+void AsyncUpdateServer::notifyProgress(size_t progress, size_t size) {
+    if (size == 0) {
+        return;
+    }
+    int currentPercent_ = (progress >= size) ? 100 : (progress * 100) / size;
+    if (currentPercent_ != _lastProgressPercent) {
+        _lastProgressPercent = currentPercent_;
+        bool serialFallback_ = true;
+#ifdef ESP32
+        serialFallback_ = !_progressHandler;
+#endif
+        dispatchCallback(_onProgress, String(currentPercent_) + "%", serialFallback_);
+    }
+}
+
+void AsyncUpdateServer::dispatchCallback(const THandlerFunction_UpdateEvent& handler, const String& message, bool serialFallback) {
+    if (handler) {
+        handler(message);
+        if (_onLog) {
+            _onLog(message);
+        }
+    } else if (_onLog) {
+        _onLog(message);
+    } else if (serialFallback && _serial_output) {
+        Serial.println(message);
+    }
+}
+
+void AsyncUpdateServer::logMessage(const String& message) {
+    if (_onLog) {
+        _onLog(message);
+    } else if (_serial_output) {
+        Serial.println(message);
+    }
+}
 
 String AsyncUpdateServer::getFormFirmware(const String & path) {
     // The action must match the update path

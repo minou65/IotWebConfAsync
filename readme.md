@@ -347,6 +347,19 @@ The `AsyncUpdateServer` class provides secure OTA firmware updates.
 AsyncUpdateServer asyncUpdater;
 
 void setup() {
+    asyncUpdater.onBegin([](const String& message) {
+        Serial.println(message);
+    });
+    asyncUpdater.onProgress([](const String& message) {
+        Serial.println("Update progress: " + message);
+    });
+    asyncUpdater.onEnd([](const String& message) {
+        Serial.println(message);
+    });
+    asyncUpdater.OnError([](const String& message) {
+        Serial.println("Update error: " + message);
+    });
+
     // Setup update server with IotWebConf
     iotWebConf.setupUpdateServer(
         [](const char* updatePath) { 
@@ -380,6 +393,14 @@ void loop() {
 - **Automatic recovery**: Built-in error handling and recovery mechanisms
 
 For a complete example, see [examples/IotWebConf03Firmware](examples/IotWebConf03Firmware).
+
+To forward updater log messages to another output, register `onLog`:
+
+```cpp
+asyncUpdater.onLog([](const String& message) {
+    Serial.println(message);
+});
+```
 
 ## Debugging
 
@@ -468,7 +489,7 @@ Handles OTA firmware updates.
 
 **Constructor:**
 ```cpp
-AsyncUpdateServer(bool serial_debug = false);
+AsyncUpdateServer(bool serial_debug = true);
 ```
 
 **Methods:**
@@ -477,6 +498,8 @@ AsyncUpdateServer(bool serial_debug = false);
 - `bool isUpdating()` - Check if update is in progress
 - `bool isFinished()` - Check if update is finished
 - `String getUpdaterError()` - Get last error message
+- `onBegin`, `onEnd`, `OnError`, and `onProgress` register callbacks receiving a `const String&` message; progress messages contain a percentage. Without a custom callback, these messages are printed with `Serial.println`.
+- `onLog` receives updater log and callback messages as `const String&` and replaces direct serial output. If no callback is registered, `serial_debug` controls fallback serial output (enabled by default).
 
 ## FAQ
 

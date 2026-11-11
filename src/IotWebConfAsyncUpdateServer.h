@@ -27,14 +27,21 @@
 #endif
 
 #include <ESPAsyncWebServer.h>
+#include <functional>
 
 class AsyncWebServer;
 
 class AsyncUpdateServer {
 public:
-    AsyncUpdateServer(bool serial_debug = false);
+    typedef std::function<void(const String&)> THandlerFunction_UpdateEvent;
+    AsyncUpdateServer(bool serial_debug = true);
     void setup(AsyncWebServer* server);
     void setup(AsyncWebServer* server, const String& path);
+    void onBegin(THandlerFunction_UpdateEvent fn);
+    void onEnd(THandlerFunction_UpdateEvent fn);
+    void OnError(THandlerFunction_UpdateEvent fn);
+    void onProgress(THandlerFunction_UpdateEvent fn);
+    void onLog(THandlerFunction_UpdateEvent fn);
 #ifdef ESP32
     typedef std::function<void(size_t, size_t)> THandlerFunction_Progress;
     void setup(AsyncWebServer* server, const String& path, THandlerFunction_Progress fn);
@@ -46,10 +53,13 @@ public:
     String getUpdaterError();
     bool isFinished();
 protected:
-    static void handleUpload(AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final, bool& handleUpdateFinished, String& updaterError, bool serial_output);
+    void handleUpload(AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final);
 #ifdef ESP32
-    static void printProgress(size_t prg, size_t sz);
+    void configureProgressHandler();
 #endif
+    void notifyProgress(size_t progress, size_t size);
+    void dispatchCallback(const THandlerFunction_UpdateEvent& handler, const String& message, bool serialFallback = true);
+    void logMessage(const String& message);
     String getFormFirmware(const String& path);
 private:
     bool _serial_output;
@@ -59,6 +69,15 @@ private:
     bool _authenticated;
     String _updaterError;
     bool _handleUpdateFinished;
+    THandlerFunction_UpdateEvent _onBegin;
+    THandlerFunction_UpdateEvent _onEnd;
+    THandlerFunction_UpdateEvent _onError;
+    THandlerFunction_UpdateEvent _onProgress;
+    THandlerFunction_UpdateEvent _onLog;
+#ifdef ESP32
+    THandlerFunction_Progress _progressHandler;
+#endif
+    int _lastProgressPercent;
 };
 
 
