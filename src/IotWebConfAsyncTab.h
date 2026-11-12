@@ -46,6 +46,8 @@ public:
         : _tabs(tabs), _minWidth(minWidth), _maxWidth(maxWidth) {
     }
 
+    virtual ~AsyncTabHtmlFormatProvider() = default;
+
     /**
      * Set the container width constraints
      */
