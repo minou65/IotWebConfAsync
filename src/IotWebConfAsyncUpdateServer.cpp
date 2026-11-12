@@ -336,9 +336,6 @@ void AsyncUpdateServer::notifyProgress(size_t progress, size_t size) {
 void AsyncUpdateServer::dispatchCallback(const THandlerFunction_UpdateEvent& handler, const String& message, bool serialFallback) {
     if (handler) {
         handler(message);
-        if (_onLog) {
-            _onLog(message);
-        }
     } else if (_onLog) {
         _onLog(message);
     } else if (serialFallback && _serial_output) {
