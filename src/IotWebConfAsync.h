@@ -38,6 +38,10 @@
 #include <IotWebConf.h>
 #include <IotWebConfOptionalGroup.h>
 #include <IotWebConfWebServerWrapper.h>
+
+#ifndef _HTTP_PARSER_H_
+#define _HTTP_PARSER_H_
+#endif
 #include <ESPAsyncWebServer.h>
 
 #ifdef ESP8266

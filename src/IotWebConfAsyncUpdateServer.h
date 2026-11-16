@@ -26,6 +26,11 @@
 #include "WProgram.h"
 #endif
 
+#include <IotWebConf.h>
+
+#ifndef _HTTP_PARSER_H_
+#define _HTTP_PARSER_H_
+#endif
 #include <ESPAsyncWebServer.h>
 #include <functional>
 
